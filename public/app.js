@@ -3,7 +3,7 @@ import { nfcSupported, readTag, linkTag } from './nfc.js';
 import { qrSvg } from './qr.js';
 
 const app = document.getElementById('app');
-const S = { me: null, tags: [], version: '' };
+const S = { me: null, tags: [], version: '', ai: false, aiFile: null };
 let routeToken = 0;
 let refresh = null; // wordt door de actieve view ingesteld voor live-updates
 let events = null;
@@ -17,7 +17,7 @@ async function boot() {
     S.version = st.version;
     if (st.needsSetup) return renderAuth('setup');
     const me = await api('GET', '/api/me');
-    S.me = me.user;
+    S.me = me.user; S.ai = !!me.ai;
     await start();
   } catch (e) {
     if (e.status === 401) return renderAuth('login');
@@ -72,6 +72,7 @@ function renderAuth(mode) {
         const body = mode === 'setup' ? { username: u.value, display_name: dn.value, password: pw.value } : { username: u.value, password: pw.value };
         const r = await api('POST', mode === 'setup' ? '/api/setup' : '/api/login', body);
         S.me = r.user;
+        S.ai = !!(await api('GET', '/api/me').catch(() => ({}))).ai;
         await start();
       } catch (ex) { err.textContent = ex.message; btn.disabled = false; }
     },
@@ -249,11 +250,20 @@ async function viewBrowse(id, token) {
 }
 function addDialog(parent) {
   const p = parent ? `&parent=${parent}` : '';
-  openDialog((close) => h('div', { class: 'dlg' }, h('h2', {}, 'Toevoegen'),
-    h('a', { class: 'btn primary', href: `#/new?container=0${p}`, onclick: () => close() }, icon('box'), 'Nieuw item'),
-    h('a', { class: 'btn', href: `#/new?container=1${p}`, onclick: () => close() }, icon('folder'), 'Nieuwe container (kamer, kast, doos…)'),
-    h('button', { class: 'btn', onclick: () => { close(); serialScan(parent); } }, icon('scan'), 'Scannen in serie (meerdere producten)'),
-    h('button', { class: 'btn ghost', onclick: () => close() }, 'Annuleren')));
+  openDialog((close) => {
+    // De foto wordt hier gekozen (klik van de gebruiker nodig) en in het nieuwe-itemscherm herkend.
+    const aiI = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none', onchange: (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      S.aiFile = file; close(); location.hash = `#/new?container=0${p}&ai=1`;
+    } });
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Toevoegen'),
+      h('a', { class: 'btn primary', href: `#/new?container=0${p}`, onclick: () => close() }, icon('box'), 'Nieuw item'),
+      h('a', { class: 'btn', href: `#/new?container=1${p}`, onclick: () => close() }, icon('folder'), 'Nieuwe container (kamer, kast, doos…)'),
+      S.ai && h('button', { class: 'btn', onclick: () => aiI.click() }, icon('sparkle'), 'Foto maken, AI vult in'),
+      h('button', { class: 'btn', onclick: () => { close(); serialScan(parent); } }, icon('scan'), 'Scannen in serie (meerdere producten)'),
+      aiI,
+      h('button', { class: 'btn ghost', onclick: () => close() }, 'Annuleren'));
+  });
 }
 
 // ============ zoeken ============
@@ -519,8 +529,34 @@ async function viewThing(id, q, token) {
     pending.map((file, i) => h('div', { class: 'photo' }, h('img', { src: URL.createObjectURL(file), alt: '' }), h('button', { type: 'button', 'aria-label': 'Verwijderen', onclick: () => { pending.splice(i, 1); drawPhotos(); } }, icon('x')))),
     pendingImageUrl && h('div', { class: 'photo pending-url' }, icon('image'), h('small', {}, 'productfoto'), h('button', { type: 'button', 'aria-label': 'Niet gebruiken', onclick: () => { pendingImageUrl = null; drawPhotos(); } }, icon('x'))),
     h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto maken', title: 'Foto maken', onclick: () => camI.click() }, icon('camera')),
-    h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto uit galerij', title: 'Uit galerij', onclick: () => fileI.click() }, icon('image'))));
+    h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto uit galerij', title: 'Uit galerij', onclick: () => fileI.click() }, icon('image')),
+    S.ai && !f.is_container && h('button', { type: 'button', class: 'addphoto ai', 'aria-label': 'Herken met AI', title: 'Naam en omschrijving laten voorstellen (AI)', onclick: () => recognize() }, icon('sparkle'), h('small', {}, 'AI'))));
   drawPhotos();
+
+  // AI-fotoherkenning: vult lege velden in en stelt bij een bestaande naam een andere naam voor.
+  let recognizing = false;
+  const recognize = async () => {
+    if (recognizing) return;
+    let r;
+    const file = pending[0];
+    if (!file && !images.length) { toast('Maak of kies eerst een foto'); camI.click(); return; }
+    recognizing = true; photoBox.classList.add('busy');
+    toast('Foto wordt herkend…');
+    try {
+      if (file) r = await api('POST', '/api/ai/recognize', await shrinkImage(file, 1024, 0.8), { 'Content-Type': 'image/jpeg' });
+      else r = await api('POST', `/api/ai/recognize?image_id=${images[0].id}`);
+    } catch (ex) { toast(ex.message, true); return; } finally { recognizing = false; photoBox.classList.remove('busy'); }
+    const s = r.suggestion;
+    if (!f.description && s.description) { f.description = s.description; descI.value = s.description; }
+    const addTags = s.tag_ids.filter((x) => !f.tag_ids.includes(x));
+    if (addTags.length) { f.tag_ids = [...f.tag_ids, ...addTags]; drawTags(); }
+    if (isNew && s.quantity > 1 && Number(f.quantity) === 1) { f.quantity = s.quantity; qtyF.querySelector('input').value = s.quantity; }
+    dirty = true;
+    if (!f.name.trim()) { f.name = s.name; nameI.value = s.name; toast(`Herkend: ${s.name}`); }
+    else if (f.name.trim() !== s.name) toast(`Voorstel: ${s.name}`, false, { label: 'Gebruiken', fn: () => { f.name = s.name; nameI.value = s.name; dirty = true; } });
+    else toast('Naam klopt al');
+  };
+
 
   const descI = h('input', { value: f.description, maxlength: 2000, oninput: (e) => { f.description = e.target.value; dirty = true; } });
   const nfcField = h('div', { class: 'field' });
@@ -622,6 +658,7 @@ async function viewThing(id, q, token) {
   main.append(bannerBox, form, labelCard);
   if (isNew) nameI.focus();
   if (isNew && f.barcode && !f.name) lookup(false);
+  if (isNew && q.ai && S.aiFile) { pending.push(S.aiFile); S.aiFile = null; drawPhotos(); recognize(); }
 
   // live: iemand anders wijzigde dit item
   if (!isNew) refresh = async () => {
@@ -688,6 +725,32 @@ async function viewTrash(token) {
   };
   refresh = () => load().catch(() => {});
   await load();
+}
+
+// ============ fotoherkenning instellen ============
+function aiDialog(info) {
+  return openDialog((close) => {
+    const tokenI = h('input', { type: 'password', autocomplete: 'off', placeholder: info.token_set ? 'Ingesteld (laat leeg om te houden)' : 'Plak hier het token', 'aria-label': 'Token' });
+    const entityI = h('input', { value: info.entity, placeholder: 'ai_task.google_ai_task', 'aria-label': 'AI-entiteit' });
+    const err = h('div', { class: 'error', role: 'alert' });
+    const save = async (body) => {
+      err.textContent = '';
+      try {
+        const r = await api('PUT', '/api/integrations/ai', body);
+        if (r.configured) { try { const t = await api('POST', '/api/integrations/ai/test'); toast(`Fotoherkenning staat aan (${t.name})`); } catch (ex) { err.textContent = `Opgeslagen, maar de test mislukte: ${ex.message}`; return; } }
+        close(r);
+      } catch (ex) { err.textContent = ex.message; }
+    };
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Fotoherkenning (AI)'),
+      h('p', { class: 'meta', style: 'margin:0' }, 'De app laat foto\'s beoordelen door de AI die in Home Assistant is ingesteld. Maak in Home Assistant onder je profiel → Beveiliging een "langlevend toegangstoken" aan (naam: Mijn Spullen) en plak het hieronder. Het token wordt alleen op de server bewaard.'),
+      h('div', { class: 'field' }, h('label', {}, 'Home Assistant-token'), tokenI),
+      h('div', { class: 'field' }, h('label', {}, 'AI-entiteit'), entityI),
+      err,
+      h('div', { class: 'dlg-actions' },
+        info.token_set && !info.token_from_env && h('button', { class: 'btn danger', onclick: () => save({ token: '' }) }, 'Uitzetten'),
+        h('button', { class: 'btn', onclick: () => close(false) }, 'Annuleren'),
+        h('button', { class: 'btn primary', onclick: () => save({ ...(tokenI.value.trim() ? { token: tokenI.value.trim() } : {}), entity: entityI.value.trim() }) }, 'Opslaan')));
+  });
 }
 
 // ============ dubbelen ============
@@ -899,8 +962,8 @@ async function viewTags(token) {
 async function viewMore(token) {
   const draw = async () => {
     const isAdminQ = S.me.role === 'admin';
-    const [users, act, tokens, integ, backups] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/activity?limit=25'), api('GET', '/api/tokens'), api('GET', '/api/integrations'),
-      isAdminQ ? api('GET', '/api/backups') : null]);
+    const [users, act, tokens, integ, backups, aiInfo] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/activity?limit=25'), api('GET', '/api/tokens'), api('GET', '/api/integrations'),
+      isAdminQ ? api('GET', '/api/backups') : null, isAdminQ ? api('GET', '/api/integrations/ai') : null]);
     if (stale(token)) return;
     const main = shell('Meer', { tab: 'more' });
     const isAdmin = S.me.role === 'admin';
@@ -940,6 +1003,10 @@ async function viewMore(token) {
         h('div', { class: 'userrow' }, h('div', { class: 'thumb' }, icon('home')), h('div', { class: 'main' }, h('b', {}, 'Home Assistant'),
           h('div', { class: 'sub' }, integ.haConfigured ? `Meldingen aan: bijna op, en houdbaarheid ≤ ${integ.notifyDays} dagen (dagelijks om ${integ.notifyHour}:00)` : 'Niet ingesteld (HA_WEBHOOK_URL in de stack)')),
           isAdmin && integ.haConfigured && h('button', { class: 'btn sm', onclick: async () => { try { await api('POST', '/api/integrations/ha/test'); toast('Testmelding verstuurd'); } catch (ex) { toast(ex.message, true); } } }, 'Test')),
+        isAdmin && h('div', { class: 'userrow' }, h('div', { class: 'thumb' }, icon('sparkle')), h('div', { class: 'main' }, h('b', {}, 'Fotoherkenning (AI)'),
+          h('div', { class: 'sub' }, aiInfo.configured ? `Aan, via ${aiInfo.entity} in Home Assistant` : 'Uit: voeg een Home Assistant-token toe')),
+          aiInfo.configured && h('button', { class: 'btn sm', onclick: async () => { try { const r = await api('POST', '/api/integrations/ai/test'); toast(`Verbonden met ${r.name}`); } catch (ex) { toast(ex.message, true); } } }, 'Test'),
+          h('button', { class: 'btn sm', onclick: () => aiDialog(aiInfo).then((ok) => { if (ok) { S.ai = ok.configured; draw(); } }) }, aiInfo.configured ? 'Wijzig' : 'Instellen')),
         h('div', { class: 'section-sub' }, 'API-tokens'),
         h('p', { class: 'meta', style: 'margin:0 0 6px' }, 'Voor Home Assistant, scripts of een app: stuur "Authorization: Bearer <token>" mee. Een token heeft jouw rechten.'),
         tokens.tokens.map((tk) => h('div', { class: 'userrow' }, h('div', { class: 'main' }, h('b', {}, tk.name), h('div', { class: 'sub' }, `${tk.prefix}… · ${tk.last_used_at ? 'laatst gebruikt ' + fmtDate(tk.last_used_at) : 'nog niet gebruikt'}`)),

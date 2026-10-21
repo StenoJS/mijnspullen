@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.4.1
+# Mijn Spullen — 0.5.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,14 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.5
+
+- **Fotoherkenning (AI)**: *Toevoegen → Foto maken, AI vult in*, of de AI-knop bij de foto's van een item. De app stuurt
+  de foto naar Home Assistant (`image/upload`), laat `ai_task.generate_data` (standaard `ai_task.google_ai_task`) een
+  naam, omschrijving, tags en aantal voorstellen, en ruimt de foto in HA daarna op. Instellen: *Meer → Koppelingen →
+  Fotoherkenning*: plak een langlevend HA-token (wordt alleen op de server bewaard). HA wordt bereikt via de host van
+  `HA_WEBHOOK_URL` of `HA_URL`; `HA_TOKEN` en `HA_AI_ENTITY` mogen ook als omgevingsvariabele.
 
 ### Nieuw in 0.4
 

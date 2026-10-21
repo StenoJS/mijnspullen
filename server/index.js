@@ -8,6 +8,7 @@ const { parseCsv, rowsToRecords } = require('./csv');
 const { lookupBarcode, fetchImage } = require('./lookup');
 const { writeTar } = require('./tar');
 const { createJobs } = require('./jobs');
+const ai = require('./ai');
 const fms = require('./fms');
 
 const VERSION = require('../package.json').version;
@@ -22,6 +23,7 @@ const MAX_IMAGES_PER_THING = 10;
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 const db = openDb(DATA_DIR);
+ai.init((key) => { const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(key); return r ? r.value : null; });
 const IMG_DIR = path.join(DATA_DIR, 'images');
 const jobs = createJobs(db, DATA_DIR);
 
@@ -436,7 +438,7 @@ route('POST', '/api/logout', USER, ({ res, user }) => {
   res.setHeader('Set-Cookie', auth.clearCookie(COOKIE_SECURE));
   return { ok: true };
 });
-route('GET', '/api/me', USER, ({ user }) => ({ user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }, version: VERSION }));
+route('GET', '/api/me', USER, ({ user }) => ({ user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }, version: VERSION, ai: ai.configured() }));
 route('POST', '/api/me/password', USER, async ({ req, user }) => {
   if (user._viaToken) throw new HttpError(403, 'Niet beschikbaar met een API-token');
   const b = await readJson(req);
@@ -566,6 +568,42 @@ function storeImage(user, thingId, buf, mime, req) {
   changed(user, 'thing', thingId, req);
   return { id, mime, has_thumb: 0 };
 }
+route('GET', '/api/integrations/ai', ADMIN, () => ai.info());
+route('PUT', '/api/integrations/ai', ADMIN, async ({ req, user }) => {
+  const b = await readJson(req);
+  const set = (k, v) => (v ? db.prepare('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)').run(k, v) : db.prepare('DELETE FROM meta WHERE key = ?').run(k));
+  if ('token' in b) set('ha_token', str(b.token, 1000).replace(/^Bearer\s+/i, ''));
+  if ('entity' in b) {
+    const e = str(b.entity, 200);
+    if (e && !/^ai_task\.[a-z0-9_]+$/.test(e)) throw bad('Entiteit moet beginnen met ai_task.');
+    set('ha_ai_entity', e);
+  }
+  logActivity(user, null, 'settings', `${user.display_name} wijzigde de instellingen voor fotoherkenning`);
+  return ai.info();
+});
+route('POST', '/api/integrations/ai/test', ADMIN, async () => {
+  try { return { ok: true, ...(await ai.check()) }; } catch (e) { throw new HttpError(502, e.message); }
+});
+// Fotoherkenning (AI via Home Assistant): een nieuwe foto in de body, of ?image_id= van een opgeslagen foto.
+route('POST', '/api/ai/recognize', USER, async ({ req, query }) => {
+  let buf, mime;
+  const imageId = Number(query.image_id);
+  if (imageId) {
+    const im = db.prepare('SELECT * FROM images WHERE id = ?').get(imageId);
+    if (!im) throw new HttpError(404, 'Foto niet gevonden');
+    buf = fs.readFileSync(path.join(IMG_DIR, `${im.id}.${im.ext}`)); mime = im.mime;
+  } else {
+    mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+    if (!IMAGE_TYPES[mime]) throw new HttpError(415, 'Alleen JPEG, PNG of WebP');
+    buf = await readBody(req, MAX_IMAGE);
+    if (!buf.length) throw bad('Leeg bestand');
+  }
+  const tags = db.prepare('SELECT id, name FROM tags').all();
+  let r;
+  try { r = await ai.recognize(buf, mime, tags.map((t) => t.name)); } catch (e) { throw new HttpError(502, e.message); }
+  const byName = new Map(tags.map((t) => [t.name.toLowerCase(), t.id]));
+  return { suggestion: { ...r, tag_ids: r.tags.map((n) => byName.get(n.toLowerCase())).filter(Boolean), new_tags: r.tags.filter((n) => !byName.has(n.toLowerCase())) } };
+});
 // Productfoto overnemen uit Open Food Facts (alleen die hosts; de server haalt hem op).
 route('POST', '/api/things/:id/images/import', USER, async ({ req, params, user }) => {
   const thingId = Number(params.id);
