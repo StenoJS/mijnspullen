@@ -3,6 +3,7 @@ services:
   mijn-spullen:
     build: .
     image: mijn-spullen:local
+    pull_policy: build   # bij elke (auto-)redeploy opnieuw bouwen uit de repo
     container_name: mijn-spullen
     restart: unless-stopped
     environment:
