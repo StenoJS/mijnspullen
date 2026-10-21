@@ -38,6 +38,7 @@ main { flex: 1; padding: 4px 16px 110px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.danger { color: var(--danger); }
 .btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost.primary { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .btn.icon { padding: 0; width: 44px; }
 .btn.sm { min-height: 36px; padding: 6px 12px; font-size: .9rem; }
 .btn:disabled { opacity: .5; cursor: default; }
@@ -170,3 +171,28 @@ svg.qr { width: 100%; height: 100%; display: block; }
   .labels { gap: 3mm; }
   .lbl { border-color: #bbb; }
 }
+
+/* ---------- 0.4: selecteren, prullenbak, uitlenen, boodschappen ---------- */
+.toast.has-action { display: flex; align-items: center; gap: 12px; pointer-events: auto; }
+.toast-btn { background: transparent; border: 0; color: #5eead4; font-weight: 700; cursor: pointer; padding: 4px 2px; font: inherit; }
+.stats { grid-template-columns: repeat(4, 1fr); }
+.stat.warn b { color: var(--warn); }
+.row .pickbox { width: 24px; height: 24px; border-radius: 7px; border: 2px solid var(--line); display: grid; place-items: center; flex: none; color: transparent; }
+.row.picked { outline: 2px solid var(--accent); background: var(--accent-soft); }
+.row.picked .pickbox { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.row .pickbox svg { width: 16px; height: 16px; }
+.bulkbar { position: fixed; left: 0; right: 0; bottom: calc(62px + env(safe-area-inset-bottom)); z-index: 35; display: flex; justify-content: center; padding: 0 12px; pointer-events: none; }
+.bulkbar-in { pointer-events: auto; max-width: 736px; width: 100%; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 8px 24px rgba(0,0,0,.2); border-radius: 16px; padding: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.bulkbar-in b { padding: 0 8px; white-space: nowrap; }
+.bulkbar-in .btn { flex: none; }
+@media (max-width: 520px) { .bulkbar-in b { flex-basis: 100%; padding: 2px 6px 4px; } .bulkbar-in .btn { flex: 1 1 auto; } }
+.badge.lent { background: #e0e7ff; color: #3730a3; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.lent { background: #262c5a; color: #c7d2fe; } }
+.lend-box { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.shop-row .need { color: var(--muted); font-size: .84rem; }
+.serial-log { max-height: 160px; overflow: auto; display: grid; gap: 4px; font-size: .9rem; }
+.serial-log div { padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.serial-log .new { background: var(--accent-soft); }
+.serial-log .err { background: var(--danger-soft); color: var(--danger); }
+.trash-row .sub { white-space: normal; }

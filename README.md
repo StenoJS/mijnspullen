@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.3.0
+# Mijn Spullen — 0.4.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,19 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.4
+
+- **Prullenbak met ongedaan maken**: verwijderen zet een item (met inhoud, tags en foto's) 30 dagen in *Meer → Prullenbak*
+  (`TRASH_DAYS`). Direct na verwijderen staat er "Ongedaan maken" in de melding. Terugzetten gebeurt op de oude plek.
+- **Meerdere tegelijk selecteren** (knop met vinkjes in een container of bij zoeken): verplaatsen, tag geven,
+  op de boodschappenlijst zetten of verwijderen in één keer.
+- **Uitlenen**: bij een item "Uitgeleend aan" + terugbrengdatum. Badge "Bij …" in lijsten, filter *Uitgeleend*,
+  teller op het startscherm, en een Home Assistant-melding (`lend_overdue`) als de datum verstreken is.
+- **Boodschappenlijst** (*Meer → Boodschappen* of de tegel op het startscherm): alles wat bijna op is plus wat je
+  zelf op de lijst zet. "Gekocht" hoogt het aantal op. Delen/kopiëren, of naar Home Assistant sturen (event `shopping`).
+- **Serie-scannen** (bij *Toevoegen → Scannen in serie*): camera blijft open, elke scan in deze container doet +1 bij
+  een bekend product of maakt een nieuw item aan (met naam en foto uit Open Food Facts).
 
 ### Nieuw in 0.3
 
@@ -124,5 +137,6 @@ login rate limit (10 pogingen / 15 min), strikte Content-Security-Policy, CSV-ex
 
 1. 0.2 — CSV-import (ook voor een FindMyStuff-export), automatische back-up naar een tweede locatie
 2. 0.3 — Herinneringen (houdbaarheid/voorraad) via Home Assistant of Telegram, labels/QR-stickers printen
-3. 0.4 — Meerdere inventarissen met rechten per gebruiker, offline-modus met synchronisatie
-4. Optioneel — PostgreSQL in plaats van SQLite
+3. 0.4 — Prullenbak, bulkacties, uitlenen, boodschappenlijst, serie-scannen (klaar)
+4. 0.5 — Offline-modus met synchronisatie, telmodus, garantie/bonnetjes, rechten per gebruiker
+5. Optioneel — PostgreSQL in plaats van SQLite

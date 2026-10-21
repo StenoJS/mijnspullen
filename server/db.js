@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'images'), { recursive: true });
@@ -114,6 +114,28 @@ function migrate(db) {
         kind TEXT NOT NULL,
         at TEXT NOT NULL,
         PRIMARY KEY (thing_id, kind)
+      );
+    `);
+  }
+  if (current < 3) {
+    db.exec(`
+      -- Uitlenen
+      ALTER TABLE things ADD COLUMN lent_to TEXT;
+      ALTER TABLE things ADD COLUMN lent_at TEXT;
+      ALTER TABLE things ADD COLUMN lent_due TEXT;
+      -- Handmatig op de boodschappenlijst gezet
+      ALTER TABLE things ADD COLUMN on_list INTEGER NOT NULL DEFAULT 0;
+      -- Prullenbak: verwijderde (sub)bomen als momentopname, 30 dagen herstelbaar
+      CREATE TABLE trash (
+        id INTEGER PRIMARY KEY,
+        thing_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        is_container INTEGER NOT NULL,
+        item_count INTEGER NOT NULL,
+        parent_id INTEGER,
+        payload TEXT NOT NULL,
+        deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        deleted_at TEXT NOT NULL
       );
     `);
   }

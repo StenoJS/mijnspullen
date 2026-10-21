@@ -98,7 +98,8 @@ test('volledige flow: setup, gebruikers, spullen, conflicten, tags, foto, export
   // verwijderen cascade
   assert.equal((await a('DELETE', `/api/things/${huis.id}`)).status, 200);
   assert.equal((await a('GET', '/api/things')).body.things.length, 0);
-  assert.equal(fs.readdirSync(path.join(process.env.DATA_DIR, 'images')).length, 0, 'fotobestanden opgeruimd');
+  assert.deepEqual(fs.readdirSync(path.join(process.env.DATA_DIR, 'images')), ['trash'], 'fotobestanden naar de prullenbak');
+  assert.ok(fs.readdirSync(path.join(process.env.DATA_DIR, 'images', 'trash')).length > 0);
 
   // logout
   assert.equal((await b('POST', '/api/logout')).status, 200);

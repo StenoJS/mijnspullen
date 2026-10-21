@@ -106,6 +106,7 @@ const scanBtn = (ctx) => h('button', { class: 'btn icon ghost', 'aria-label': 'S
 async function route() {
   const token = ++routeToken;
   refresh = null;
+  sel.on = false; sel.ids.clear();
   const raw = location.hash.slice(1) || '/';
   const [p, qs] = raw.split('?');
   const q = Object.fromEntries(new URLSearchParams(qs || ''));
@@ -120,6 +121,8 @@ async function route() {
     else if (seg[0] === 'tags') await viewTags(token);
     else if (seg[0] === 'more') await viewMore(token);
     else if (seg[0] === 'labels') await viewLabels(Number(seg[1]) || null, q, token);
+    else if (seg[0] === 'shopping') await viewShopping(token);
+    else if (seg[0] === 'trash') await viewTrash(token);
     else await viewBrowse(null, token);
   } catch (e) {
     if (token !== routeToken || e.status === 401) return;
@@ -129,9 +132,47 @@ async function route() {
 }
 const stale = (t) => t !== routeToken;
 
+// ============ selecteren (meerdere tegelijk) ============
+const sel = { on: false, ids: new Set(), bar: null, count: null };
+function selectBtn(redraw) {
+  return h('button', { class: 'btn icon ghost' + (sel.on ? ' primary' : ''), 'aria-label': 'Selecteren', title: 'Meerdere selecteren', onclick: () => { sel.on = !sel.on; sel.ids.clear(); redraw(); } }, icon('select'));
+}
+function bulkBar(redraw) {
+  if (!sel.on) return null;
+  const count = h('b', {}, '0 geselecteerd');
+  sel.count = () => { count.textContent = `${sel.ids.size} geselecteerd`; };
+  const run = async (body, msg) => {
+    if (!sel.ids.size) { toast('Selecteer eerst iets', true); return; }
+    try { const r = await api('POST', '/api/things/bulk', { ids: [...sel.ids], ...body }); toast(msg(r.done)); sel.on = false; sel.ids.clear(); redraw(); }
+    catch (ex) { toast(ex.message, true); }
+  };
+  const bar = h('div', { class: 'bulkbar' }, h('div', { class: 'bulkbar-in' }, count,
+    h('button', { class: 'btn sm', onclick: async () => { const r = await pickLocation(null, null, true); if (r) run({ action: 'move', parent_id: r.id }, (n) => `${n} verplaatst`); } }, icon('move'), 'Verplaatsen'),
+    h('button', { class: 'btn sm', onclick: async () => { const t = await pickTag(); if (t) run({ action: t.remove ? 'untag' : 'tag', tag_id: t.id }, (n) => `Tag ${t.remove ? 'weggehaald bij' : 'gezet op'} ${n}`); } }, icon('tag'), 'Tag'),
+    h('button', { class: 'btn sm', onclick: () => run({ action: 'list', value: true }, (n) => `${n} op de boodschappenlijst`) }, icon('cart'), 'Op lijst'),
+    h('button', { class: 'btn sm danger', onclick: async () => {
+      if (!sel.ids.size) return;
+      if (await confirmDialog(`${sel.ids.size} dingen verwijderen?`, `Ze gaan naar de prullenbak (Meer → Prullenbak) en zijn daar ${30} dagen terug te zetten. Wat erin zit gaat mee.`)) run({ action: 'delete' }, (n) => `${n} naar de prullenbak`);
+    } }, icon('trash'), 'Verwijderen'),
+    h('button', { class: 'btn sm ghost', onclick: () => { sel.on = false; sel.ids.clear(); redraw(); } }, 'Klaar')));
+  sel.count();
+  return bar;
+}
+async function pickTag() {
+  if (!S.tags.length) { toast('Maak eerst een tag aan (tabblad Tags)', true); return null; }
+  return openDialog((close) => {
+    const remove = h('input', { type: 'checkbox' });
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Welke tag?'),
+      h('div', { class: 'chips' }, tagsFlat().map((g) => h('button', { class: 'chip', onclick: () => close({ id: g.id, remove: remove.checked }) }, h('span', { class: 'dot', style: `background:${g.color}` }), g.name))),
+      h('label', { class: 'check' }, remove, 'Tag juist weghalen'),
+      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(null) }, 'Annuleren')));
+  });
+}
+
 // ============ rijen ============
 function badgesFor(t) {
   const b = [];
+  if (t.lent_to) b.push(h('span', { class: 'badge lent' }, `Bij ${t.lent_to}`));
   if (!t.is_container && t.min_quantity != null && t.quantity <= t.min_quantity) b.push(h('span', { class: 'badge low' }, 'Bijna op'));
   const d = daysUntil(t.expires_on);
   if (d != null && d <= 30) b.push(h('span', { class: 'badge exp' }, d < 0 ? 'Verlopen' : d === 0 ? 'Vandaag' : `Nog ${d} d`));
@@ -139,16 +180,20 @@ function badgesFor(t) {
   return b;
 }
 function thingRow(t, { showPath } = {}) {
-  const go = () => { location.hash = t.is_container ? `#/c/${t.id}` : `#/t/${t.id}`; };
+  const go = () => {
+    if (sel.on) { if (sel.ids.has(t.id)) sel.ids.delete(t.id); else sel.ids.add(t.id); row.classList.toggle('picked', sel.ids.has(t.id)); sel.count && sel.count(); return; }
+    location.hash = t.is_container ? `#/c/${t.id}` : `#/t/${t.id}`;
+  };
   const thumb = h('div', { class: 'thumb' }, t.cover_image_id ? h('img', { src: `/api/images/${t.cover_image_id}?thumb=1`, loading: 'lazy', alt: '' }) : icon(t.is_container ? 'folder' : 'box'));
   let sub = '';
   if (showPath && t.path.length) sub = t.path.map((p) => p.name).join(' › ');
   else if (t.is_container) sub = t.child_count === 1 ? '1 onderdeel' : `${t.child_count} onderdelen`;
   else if (t.description) sub = t.description;
-  const row = h('div', { class: 'row' + (t.is_container ? ' container' : ''), role: 'link', tabindex: '0', onclick: go, onkeydown: (e) => { if (e.key === 'Enter') go(); } },
+  const row = h('div', { class: 'row' + (t.is_container ? ' container' : '') + (sel.on && sel.ids.has(t.id) ? ' picked' : ''), role: 'link', tabindex: '0', onclick: go, onkeydown: (e) => { if (e.key === 'Enter') go(); } },
+    sel.on && h('span', { class: 'pickbox' }, icon('check')),
     thumb,
     h('div', { class: 'main' }, h('div', { class: 'name' }, (t.favourite ? '★ ' : '') + t.name), sub && h('div', { class: 'sub' }, sub), h('div', { class: 'badges' }, badgesFor(t))));
-  if (!t.is_container) {
+  if (!t.is_container && !sel.on) {
     const out = h('output', {}, num(t.quantity));
     const adj = (delta) => async (e) => {
       e.stopPropagation();
@@ -174,7 +219,7 @@ async function viewBrowse(id, token) {
     const parentHref = c ? (c.path.length ? `#/c/${c.path[c.path.length - 1].id}` : '#/') : null;
     const main = shell(c ? c.name : 'Mijn Spullen', {
       tab: 'home', back: parentHref,
-      actions: [h('a', { class: 'btn icon ghost', href: `#/labels/${id || 0}`, 'aria-label': 'Labels printen', title: 'Labels printen' }, icon('qr')),
+      actions: [selectBtn(load), h('a', { class: 'btn icon ghost', href: `#/labels/${id || 0}`, 'aria-label': 'Labels printen', title: 'Labels printen' }, icon('qr')),
         c && h('a', { class: 'btn icon ghost', href: `#/t/${c.id}`, 'aria-label': 'Bewerken' }, icon('more')), scanBtn(id)],
     });
     if (!c) {
@@ -183,8 +228,9 @@ async function viewBrowse(id, token) {
         h('form', { class: 'search', onsubmit: (e) => { e.preventDefault(); location.hash = `#/search?q=${encodeURIComponent(e.target.q.value)}`; } }, icon('search'), h('input', { name: 'q', placeholder: 'Zoek in al je spullen…', type: 'search', 'aria-label': 'Zoeken' })),
         h('div', { class: 'stats' },
           h('a', { class: 'stat', href: '#/search' }, h('b', {}, num(s.items)), h('span', {}, 'items')),
-          h('a', { class: 'stat' + (s.low ? ' alert' : ''), href: '#/search?low=1' }, h('b', {}, num(s.low)), h('span', {}, 'bijna op')),
-          h('a', { class: 'stat' + (s.expiring ? ' alert' : ''), href: '#/search?expiring=30' }, h('b', {}, num(s.expiring)), h('span', {}, 'verloopt'))));
+          h('a', { class: 'stat' + (s.shopping ? ' alert' : ''), href: '#/shopping' }, h('b', {}, num(s.shopping)), h('span', {}, 'boodschappen')),
+          h('a', { class: 'stat' + (s.expiring ? ' warn' : ''), href: '#/search?expiring=30' }, h('b', {}, num(s.expiring)), h('span', {}, 'verloopt')),
+          h('a', { class: 'stat', href: '#/search?lent=1' }, h('b', {}, num(s.lent)), h('span', {}, 'uitgeleend'))));
     } else {
       main.append(h('nav', { class: 'crumbs', 'aria-label': 'Locatie' }, h('a', { href: '#/' }, 'Alles'), c.path.map((p) => [' › ', h('a', { href: `#/c/${p.id}` }, p.name)]), ' › ', h('b', {}, c.name)));
     }
@@ -194,7 +240,8 @@ async function viewBrowse(id, token) {
     } else {
       main.append(h('div', { class: 'list' }, list.things.map((t) => thingRow(t))));
     }
-    main.append(h('button', { class: 'fab', 'aria-label': 'Toevoegen', onclick: () => addDialog(id) }, icon('plus')));
+    if (sel.on) main.append(bulkBar(load));
+    else main.append(h('button', { class: 'fab', 'aria-label': 'Toevoegen', onclick: () => addDialog(id) }, icon('plus')));
   };
   refresh = () => load().catch(() => {});
   await load();
@@ -204,13 +251,17 @@ function addDialog(parent) {
   openDialog((close) => h('div', { class: 'dlg' }, h('h2', {}, 'Toevoegen'),
     h('a', { class: 'btn primary', href: `#/new?container=0${p}`, onclick: () => close() }, icon('box'), 'Nieuw item'),
     h('a', { class: 'btn', href: `#/new?container=1${p}`, onclick: () => close() }, icon('folder'), 'Nieuwe container (kamer, kast, doos…)'),
+    h('button', { class: 'btn', onclick: () => { close(); serialScan(parent); } }, icon('scan'), 'Scannen in serie (meerdere producten)'),
     h('button', { class: 'btn ghost', onclick: () => close() }, 'Annuleren')));
 }
 
 // ============ zoeken ============
 async function viewSearch(q, token) {
-  const state = { q: q.q || '', low: q.low === '1', expiring: q.expiring || '', favourite: q.favourite === '1', tag: q.tag || '' };
-  const main = shell('Zoeken', { tab: 'search', actions: scanBtn(null) });
+  const state = { q: q.q || '', low: q.low === '1', expiring: q.expiring || '', favourite: q.favourite === '1', tag: q.tag || '', lent: q.lent === '1' };
+  const barBox = h('div');
+  const redraw = () => { sb.classList.toggle('primary', sel.on); barBox.replaceChildren(...flat(bulkBar(redraw))); run().catch(() => {}); };
+  const sb = h('button', { class: 'btn icon ghost', 'aria-label': 'Selecteren', title: 'Meerdere selecteren', onclick: () => { sel.on = !sel.on; sel.ids.clear(); redraw(); } }, icon('select'));
+  const main = shell('Zoeken', { tab: 'search', actions: [sb, scanBtn(null)] });
   const results = h('div', { class: 'list' });
   const input = h('input', { type: 'search', placeholder: 'Naam, omschrijving, barcode of tag…', value: state.q, 'aria-label': 'Zoeken' });
   const chipBox = h('div', { class: 'chips' });
@@ -221,6 +272,7 @@ async function viewSearch(q, token) {
     if (state.expiring) p.set('expiring', state.expiring);
     if (state.favourite) p.set('favourite', '1');
     if (state.tag) p.set('tag', state.tag);
+    if (state.lent) p.set('lent', '1');
     history.replaceState(null, '', '#/search' + (p.toString() ? '?' + p : ''));
     p.set('sort', state.expiring ? 'expires' : 'name');
     const r = await api('GET', '/api/things?' + p);
@@ -233,14 +285,15 @@ async function viewSearch(q, token) {
       chip('Bijna op', state.low, () => { state.low = !state.low; }),
       chip('Verloopt ≤ 30 d', state.expiring === '30', () => { state.expiring = state.expiring === '30' ? '' : '30'; }),
       chip('★ Favoriet', state.favourite, () => { state.favourite = !state.favourite; }),
+      chip('Uitgeleend', state.lent, () => { state.lent = !state.lent; }),
       tagsFlat().map((t) => chip(t.name, state.tag === String(t.id), () => { state.tag = state.tag === String(t.id) ? '' : String(t.id); }, t.color))));
   };
   input.addEventListener('input', debounce(() => { state.q = input.value.trim(); run().catch((e) => toast(e.message, true)); }, 250));
-  main.append(h('div', { class: 'search' }, icon('search'), input), chipBox, results);
+  main.append(h('div', { class: 'search' }, icon('search'), input), chipBox, results, barBox);
   drawChips();
   refresh = () => run().catch(() => {});
   await run();
-  if (!state.q && !q.low && !q.expiring) input.focus();
+  if (!state.q && !q.low && !q.expiring && !q.lent) input.focus();
 }
 
 // ============ scannen ============
@@ -357,7 +410,7 @@ async function scanAndGo(parentId) {
 }
 
 // ============ locatie kiezen ============
-async function pickLocation(excludeId, currentId) {
+async function pickLocation(excludeId, currentId, onlyContainers) {
   const { nodes } = await api('GET', '/api/tree');
   const kids = new Map();
   nodes.forEach((n) => { const k = n.parent_id || 0; (kids.get(k) || kids.set(k, []).get(k)).push(n); });
@@ -366,7 +419,7 @@ async function pickLocation(excludeId, currentId) {
   return openDialog((close) => {
     const rows = [h('button', { class: 'pick' + (!currentId ? ' cur' : ''), type: 'button', onclick: () => close({ id: null }) }, icon('home'), 'Hoofdniveau (geen locatie)')];
     const walk = (pid, depth) => (kids.get(pid) || []).forEach((n) => {
-      if (banned.has(n.id)) return;
+      if (banned.has(n.id) || (onlyContainers && !n.is_container)) return;
       rows.push(h('button', { class: 'pick' + (n.id === currentId ? ' cur' : ''), type: 'button', style: `padding-left:${10 + depth * 18}px`, onclick: () => close({ id: n.id }) }, icon(n.is_container ? 'folder' : 'box'), n.name));
       walk(n.id, depth + 1);
     });
@@ -383,7 +436,7 @@ async function viewThing(id, q, token) {
   const isNew = !t;
   const f = isNew
     ? { is_container: q.container === '1', name: '', description: '', notes: '', quantity: 1, min_quantity: '', barcode: q.barcode || '', nfc_id: q.nfc || null, price: '', expires_on: '', favourite: false, parent_id: q.parent ? Number(q.parent) : null, tag_ids: [], path: [] }
-    : { ...t, min_quantity: t.min_quantity ?? '', barcode: t.barcode || '', price: t.price ?? '', expires_on: t.expires_on || '' };
+    : { ...t, min_quantity: t.min_quantity ?? '', barcode: t.barcode || '', price: t.price ?? '', expires_on: t.expires_on || '', lent_to: t.lent_to || '', lent_due: t.lent_due || '' };
   if (isNew && f.parent_id) { const p = (await api('GET', `/api/things/${f.parent_id}`).catch(() => null)); if (p) f.path = [...p.thing.path, { id: p.thing.id, name: p.thing.name }]; else f.parent_id = null; }
   const pending = []; // foto's voor een nog niet opgeslagen item
   let pendingImageUrl = null; // productfoto uit Open Food Facts, wordt na opslaan overgenomen
@@ -479,6 +532,19 @@ async function viewThing(id, q, token) {
     isNew && !f.nfc_id && nfcSupported() && h('div', { class: 'meta' }, 'Na opslaan kun je hier een tag koppelen.'),
     !nfcSupported() && !f.nfc_id && h('div', { class: 'meta' }, 'NFC werkt in Chrome op Android. Je kunt ook een QR-label printen.')));
   drawNfc();
+  // uitlenen + boodschappenlijst (alleen voor items)
+  const lendTo = h('input', { value: f.lent_to || '', maxlength: 100, placeholder: 'Naam, bijv. Buurman Henk', oninput: (e) => { f.lent_to = e.target.value; dirty = true; } });
+  const lendDue = h('input', { type: 'date', value: f.lent_due || '', oninput: (e) => { f.lent_due = e.target.value; dirty = true; } });
+  const lendBox = h('div', { class: 'field' }, h('span', { class: 'label' }, 'Uitgeleend aan'),
+    h('div', { class: 'lend-box' },
+      h('div', { class: 'grid2' }, lendTo, lendDue),
+      !isNew && t.lent_to && h('div', { class: 'switch-row' }, h('span', { class: 'meta', style: 'margin:0' }, `Sinds ${fmtDate(t.lent_at)}${t.lent_due ? ` · terug op ${t.lent_due}` : ''}`),
+        h('button', { class: 'btn sm primary', type: 'button', onclick: async () => {
+          try { await api('PATCH', `/api/things/${id}`, { lent_to: '', version: t.version }); toast(`"${t.name}" is terug`); dirty = false; route(); } catch (ex) { toast(ex.message, true); }
+        } }, icon('undo'), 'Is terug'))));
+  const listBtn = h('button', { type: 'button', class: 'btn sm' + (f.on_list ? ' primary' : ''), onclick: (e) => { f.on_list = !f.on_list; dirty = true; e.currentTarget.classList.toggle('primary', !!f.on_list); } }, icon('cart'), 'Op boodschappenlijst');
+  itemOnly.push(lendBox, listBtn);
+  if (f.is_container) [lendBox, listBtn].forEach((el) => { el.style.display = 'none'; });
   const favBtn = h('button', { type: 'button', class: 'btn sm', onclick: (e) => { f.favourite = !f.favourite; dirty = true; e.currentTarget.classList.toggle('primary', f.favourite); } }, icon('star'), 'Favoriet');
   if (f.favourite) favBtn.classList.add('primary');
 
@@ -487,6 +553,7 @@ async function viewThing(id, q, token) {
     const body = {
       name: f.name, is_container: f.is_container, description: f.description, notes: f.notes, barcode: f.barcode,
       expires_on: f.expires_on, favourite: f.favourite, parent_id: f.parent_id, tag_ids: f.tag_ids, nfc_id: f.nfc_id || null,
+      ...(f.is_container ? {} : { lent_to: f.lent_to || '', lent_due: f.lent_to ? f.lent_due : '', on_list: !!f.on_list }),
       quantity: f.is_container ? (f.quantity === '' ? 1 : f.quantity) : f.quantity, min_quantity: f.is_container ? '' : f.min_quantity, price: f.is_container ? '' : f.price,
     };
     saveBtn.disabled = true;
@@ -532,15 +599,20 @@ async function viewThing(id, q, token) {
     h('div', { class: 'field' }, h('label', {}, 'Barcode / QR'), h('div', { class: 'inline' }, barcodeI, lookupBtn, scanInto)),
     h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), descI),
     nfcField,
+    lendBox,
     h('div', { class: 'field' }, h('label', {}, 'Notities'), h('textarea', { oninput: (e) => { f.notes = e.target.value; dirty = true; } }, f.notes)),
-    h('div', { class: 'actions' }, favBtn),
+    h('div', { class: 'actions' }, favBtn, listBtn),
     !isNew && h('div', { class: 'meta' }, `Aangemaakt door ${t.created_by_name || 'onbekend'} op ${fmtDate(t.created_at)}`, h('br'), `Laatst gewijzigd door ${t.updated_by_name || 'onbekend'} op ${fmtDate(t.updated_at)}`, t.expires_on ? h('br') : null, t.expires_on ? expiryText(t.expires_on) : null),
     err,
     h('div', { class: 'actions' }, saveBtn,
       !isNew && h('button', { class: 'btn danger', type: 'button', onclick: async () => {
         const kids = t.child_count;
-        if (!await confirmDialog(`"${t.name}" verwijderen?`, kids ? `Dit verwijdert ook alles wat erin zit (${kids} direct onderdeel${kids === 1 ? '' : 'en'} en dieper). Dit kan niet ongedaan worden gemaakt.` : 'Dit kan niet ongedaan worden gemaakt.')) return;
-        try { await api('DELETE', `/api/things/${id}`); toast('Verwijderd'); location.hash = back; } catch (ex) { toast(ex.message, true); }
+        if (!await confirmDialog(`"${t.name}" verwijderen?`, kids ? `Alles wat erin zit gaat mee (${kids} direct onderdeel${kids === 1 ? '' : 'en'} en dieper). Je kunt het 30 dagen terugzetten vanuit de prullenbak.` : 'Je kunt het 30 dagen terugzetten vanuit de prullenbak (Meer → Prullenbak).')) return;
+        try {
+          const r = await api('DELETE', `/api/things/${id}`);
+          toast(`"${t.name}" naar de prullenbak`, false, { label: 'Ongedaan maken', fn: async () => { try { const x = await api('POST', `/api/trash/${r.trash_id}/restore`); toast('Teruggezet'); location.hash = x.thing.is_container ? `#/c/${x.thing.id}` : `#/t/${x.thing.id}`; } catch (ex) { toast(ex.message, true); } } });
+          location.hash = back;
+        } catch (ex) { toast(ex.message, true); }
       } }, icon('trash'), 'Verwijderen')));
   const labelCard = !isNew && h('div', { class: 'card label-card' },
     h('div', { class: 'qr-mini' }, qrSvg(thingUrl(t))),
@@ -559,6 +631,119 @@ async function viewThing(id, q, token) {
       bannerBox.replaceChildren(h('div', { class: 'banner' }, `${cur.updated_by_name || 'Iemand'} heeft dit item gewijzigd.`, h('button', { class: 'btn sm', onclick: () => route() }, 'Verversen')));
     } catch (ex) { if (ex.status === 404) { toast('Dit item is verwijderd', true); location.hash = back; } }
   };
+}
+
+// ============ boodschappen ============
+async function viewShopping(token) {
+  const load = async () => {
+    const [r, integ] = await Promise.all([api('GET', '/api/things?shopping=1&sort=name&limit=500'), api('GET', '/api/integrations')]);
+    if (stale(token)) return;
+    const main = shell('Boodschappen', { back: '#/', tab: 'home' });
+    main.append(h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Alles wat bijna op is (aantal ≤ meldgrens) en wat je zelf op de lijst zette. Na "Gekocht" gaat het aantal omhoog en verdwijnt het van de lijst.'));
+    if (!r.things.length) { main.append(h('div', { class: 'empty' }, 'Niets nodig. Zet iets op de lijst via een item, of geef items een meldgrens ("Melden bij ≤").')); return; }
+    main.append(h('div', { class: 'list' }, r.things.map((t) => {
+      const need = t.min_quantity != null ? Math.max(1, t.min_quantity - t.quantity + 1) : 1;
+      return h('div', { class: 'row shop-row' },
+        h('div', { class: 'thumb' }, t.cover_image_id ? h('img', { src: `/api/images/${t.cover_image_id}?thumb=1`, loading: 'lazy', alt: '' }) : icon('box')),
+        h('a', { class: 'main', href: `#/t/${t.id}`, style: 'text-decoration:none;color:inherit' }, h('div', { class: 'name' }, t.name),
+          h('div', { class: 'need' }, `Nog ${num(t.quantity)}${t.min_quantity != null ? ` · melden bij ≤ ${num(t.min_quantity)}` : ' · zelf op de lijst gezet'}${t.path.length ? ` · ${t.path.map((p) => p.name).join(' › ')}` : ''}`)),
+        h('button', { class: 'btn sm primary', onclick: async () => {
+          const n = await openDialog((close) => {
+            const q = h('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: need });
+            return h('form', { class: 'dlg', onsubmit: (e) => { e.preventDefault(); close(Number(q.value)); } }, h('h2', {}, `${t.name} gekocht`),
+              h('div', { class: 'field' }, h('label', {}, 'Hoeveel erbij?'), q),
+              h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary', type: 'submit' }, 'Opslaan')));
+          });
+          if (n == null || Number.isNaN(n)) return;
+          try { await api('POST', `/api/things/${t.id}/bought`, { quantity: n }); toast(`${t.name}: +${num(n)}`); load(); } catch (ex) { toast(ex.message, true); }
+        } }, icon('check'), 'Gekocht'));
+    })));
+    main.append(h('div', { class: 'actions', style: 'margin-top:14px' },
+      integ.haConfigured && h('button', { class: 'btn', onclick: async () => { try { const x = await api('POST', '/api/shopping/send'); toast(`${x.sent} producten naar Home Assistant gestuurd`); } catch (ex) { toast(ex.message, true); } } }, icon('home'), 'Stuur naar Home Assistant'),
+      h('button', { class: 'btn', onclick: async () => {
+        const text = r.things.map((t) => `- ${t.name}`).join('\n');
+        try { if (navigator.share) await navigator.share({ title: 'Boodschappen', text }); else { await navigator.clipboard.writeText(text); toast('Lijst gekopieerd'); } } catch { /* geannuleerd */ }
+      } }, icon('upload'), 'Delen / kopiëren')));
+  };
+  refresh = () => load().catch(() => {});
+  await load();
+}
+
+// ============ prullenbak ============
+async function viewTrash(token) {
+  const load = async () => {
+    const r = await api('GET', '/api/trash');
+    if (stale(token)) return;
+    const isAdmin = S.me.role === 'admin';
+    const main = shell('Prullenbak', { back: '#/more', tab: 'more' });
+    main.append(h('p', { class: 'meta', style: 'margin:0 0 10px' }, `Verwijderde spullen blijven hier ${r.days} dagen staan, inclusief alles wat erin zat en de foto's. Terugzetten gebeurt op de oude plek (of op het hoofdniveau als die niet meer bestaat).`));
+    if (!r.items.length) { main.append(h('div', { class: 'empty' }, 'De prullenbak is leeg.')); return; }
+    main.append(h('div', { class: 'list' }, r.items.map((x) => h('div', { class: 'row trash-row' },
+      h('div', { class: 'thumb' }, icon(x.is_container ? 'folder' : 'box')),
+      h('div', { class: 'main' }, h('div', { class: 'name' }, x.name), h('div', { class: 'sub' }, `${x.item_count > 1 ? `met ${x.item_count - 1} onderdelen · ` : ''}${x.deleted_by || 'iemand'} · ${fmtDate(x.deleted_at)}`)),
+      h('button', { class: 'btn sm primary', onclick: async () => { try { await api('POST', `/api/trash/${x.id}/restore`); toast(`"${x.name}" teruggezet`); load(); } catch (ex) { toast(ex.message, true); } } }, icon('undo'), 'Terug'),
+      isAdmin && h('button', { class: 'btn sm danger', 'aria-label': 'Definitief verwijderen', onclick: async () => { if (!await confirmDialog(`"${x.name}" definitief verwijderen?`, 'Dit kan niet ongedaan worden gemaakt.')) return; await api('DELETE', `/api/trash/${x.id}`); load(); } }, icon('trash'))))));
+    if (isAdmin) main.append(h('div', { class: 'actions', style: 'margin-top:14px' }, h('button', { class: 'btn danger', onclick: async () => { if (!await confirmDialog('Prullenbak legen?', 'Alles hierin wordt definitief verwijderd, inclusief foto\'s.')) return; await api('DELETE', '/api/trash'); load(); } }, icon('trash'), 'Prullenbak legen')));
+  };
+  refresh = () => load().catch(() => {});
+  await load();
+}
+
+// ============ scannen in serie ============
+// Camera blijft open: bekende code in deze container → +1, elders → melding, onbekend → nieuw item (met productgegevens).
+function serialScan(parentId) {
+  return openDialog((close) => {
+    const video = h('video', { playsinline: true, muted: true, autoplay: true });
+    const wrap = h('div', { class: 'video-wrap' }, video, h('div', { class: 'aim' }));
+    const log = h('div', { class: 'serial-log' });
+    const note = h('div', { class: 'meta', style: 'margin:0' }, parentId ? 'Scan het ene product na het andere. Bestaand in deze container: +1. Nieuw: wordt hier toegevoegd.' : 'Scan het ene product na het andere. Bestaand: +1. Nieuw: komt op het hoofdniveau.');
+    const manual = h('input', { placeholder: 'Of typ een code', inputmode: 'numeric', 'aria-label': 'Code' });
+    let stream = null, done = false, count = 0;
+    const recent = new Map();
+    const add = (cls, text) => { log.prepend(h('div', { class: cls }, text)); };
+    const handle = async (code) => {
+      const last = recent.get(code);
+      if (last && Date.now() - last < 2500) return; // zelfde code die nog voor de camera hangt
+      recent.set(code, Date.now());
+      navigator.vibrate?.(40);
+      try {
+        const found = (await api('GET', `/api/things?barcode=${encodeURIComponent(code)}`)).things.filter((x) => !x.is_container);
+        const here = found.find((x) => (x.parent_id || null) === (parentId || null));
+        if (here) { const r = await api('POST', `/api/things/${here.id}/adjust`, { delta: 1 }); add('', `+1 ${here.name} (nu ${num(r.thing.quantity)})`); count++; return; }
+        if (found.length) { add('err', `${found[0].name} staat al in ${found[0].path.map((p) => p.name).join(' › ') || 'het hoofdniveau'}; niet dubbel aangemaakt`); return; }
+        const p = (await api('GET', `/api/lookup/${encodeURIComponent(code)}`).catch(() => ({}))).product;
+        const t = (await api('POST', '/api/things', { name: p ? p.name : `Onbekend product ${code}`, description: p ? p.description : '', barcode: code, quantity: 1, parent_id: parentId || null })).thing;
+        if (p && p.image_url) api('POST', `/api/things/${t.id}/images/import`, { url: p.image_url }).catch(() => {});
+        add('new', `Nieuw: ${t.name}`); count++;
+      } catch (ex) { add('err', `${code}: ${ex.message}`); }
+    };
+    const finish = () => { done = true; stream && stream.getTracks().forEach((x) => x.stop()); close(count); if (count) { toast(`${count} gescand`); if (refresh) refresh(); } };
+    (async () => {
+      if (!('BarcodeDetector' in window) || !navigator.mediaDevices) { wrap.style.display = 'none'; note.textContent = 'Camera-scan werkt niet in deze browser; typ de codes hieronder.'; return; }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        video.srcObject = stream; await video.play();
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+        const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'qr_code'] });
+        let lastV = '', hits = 0;
+        const tick = async () => {
+          if (done || !video.isConnected) { stream.getTracks().forEach((x) => x.stop()); return; }
+          try {
+            const c = (await det.detect(video)).find((x) => x.rawValue && (x.format === 'qr_code' || validEan(x.rawValue)));
+            if (c) { hits = c.rawValue === lastV ? hits + 1 : 1; lastV = c.rawValue; if (hits >= 2) { hits = 0; handle(c.rawValue); } }
+          } catch { /* */ }
+          setTimeout(tick, 150);
+        };
+        tick();
+      } catch { wrap.style.display = 'none'; note.textContent = 'Geen cameratoegang; typ de codes hieronder.'; }
+    })();
+    return h('form', { class: 'dlg', onsubmit: (e) => { e.preventDefault(); const v = manual.value.trim(); if (v) { recent.delete(v); handle(v); manual.value = ''; } } },
+      h('h2', {}, 'Scannen in serie'), wrap, note, log,
+      h('div', { class: 'inline' }, manual, h('button', { class: 'btn', type: 'submit' }, 'Toevoegen')),
+      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: finish }, 'Klaar')));
+  });
 }
 
 // ============ NFC & labels ============
@@ -687,6 +872,8 @@ async function viewMore(token) {
         h('a', { class: 'btn', href: '/api/export.csv', download: true }, icon('download'), 'Exporteer als CSV'),
         h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
         h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
+        h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Boodschappen'),
+        h('a', { class: 'btn', href: '#/trash' }, icon('trash'), 'Prullenbak'),
         isAdmin && h('button', { class: 'btn', onclick: () => fmsDialog().then((ok) => ok && draw()) }, icon('upload'), 'Find my stuff importeren'))),
       isAdmin && h('div', { class: 'section-title' }, 'Opnieuw beginnen'),
       isAdmin && h('div', { class: 'card' },

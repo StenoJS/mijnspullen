@@ -95,11 +95,22 @@ function createJobs(db, dataDir) {
     return { ...r, count: rows.length };
   }
 
+  async function notifyOverdueLending() {
+    const rows = db.prepare(`SELECT * FROM things WHERE lent_to IS NOT NULL AND lent_due IS NOT NULL AND lent_due < date('now', 'localtime')
+      AND id NOT IN (SELECT thing_id FROM notified WHERE kind = 'lend') ORDER BY lent_due LIMIT 50`).all();
+    if (!rows.length) return { ok: true, count: 0 };
+    const items = rows.map((t) => ({ ...describe(t), lent_to: t.lent_to, lent_due: t.lent_due }));
+    const r = await sendHa({ event: 'lend_overdue', title: 'Uitgeleend', message: rows.map((t) => `${t.name} bij ${t.lent_to} (terug op ${t.lent_due})`).join(', '), items });
+    if (r.ok) { const ins = db.prepare("INSERT OR REPLACE INTO notified(thing_id, kind, at) VALUES(?, 'lend', ?)"); for (const t of rows) ins.run(t.id, new Date().toISOString()); }
+    return { ...r, count: rows.length };
+  }
+  function lendingChanged(thingId) { db.prepare("DELETE FROM notified WHERE thing_id = ? AND kind = 'lend'").run(thingId); }
+
   function summary() {
     const low = db.prepare('SELECT * FROM things WHERE is_container = 0 AND min_quantity IS NOT NULL AND quantity <= min_quantity ORDER BY name COLLATE NOCASE LIMIT 100').all();
     const expiring = db.prepare("SELECT * FROM things WHERE expires_on IS NOT NULL AND expires_on <= date('now', 'localtime', ?) ORDER BY expires_on LIMIT 100").all(`+${NOTIFY_DAYS} days`);
-    const c = db.prepare('SELECT SUM(is_container = 0) items, SUM(is_container = 1) containers FROM things').get();
-    return { items: c.items || 0, containers: c.containers || 0, low_count: low.length, expiring_count: expiring.length, expiring_days: NOTIFY_DAYS, low: low.map(describe), expiring: expiring.map(describe) };
+    const c = db.prepare('SELECT SUM(is_container = 0) items, SUM(is_container = 1) containers, SUM(lent_to IS NOT NULL) lent FROM things').get();
+    return { items: c.items || 0, containers: c.containers || 0, lent_count: c.lent || 0, low_count: low.length, expiring_count: expiring.length, expiring_days: NOTIFY_DAYS, low: low.map(describe), expiring: expiring.map(describe) };
   }
 
   // ---------- planner ----------
@@ -116,6 +127,7 @@ function createJobs(db, dataDir) {
     if (HA_WEBHOOK_URL && done.notify !== day && nowD.getHours() >= NOTIFY_HOUR) {
       done.notify = day;
       notifyExpiring(false).catch((e) => console.error('Houdbaarheidsmelding mislukt:', e.message));
+      notifyOverdueLending().catch((e) => console.error('Uitleenmelding mislukt:', e.message));
     }
   }
   function start() {
@@ -125,7 +137,7 @@ function createJobs(db, dataDir) {
 
   return {
     listBackups, makeBackup, backupFile, snapshot, backupDir,
-    sendHa, checkLowStock, expiryChanged, notifyExpiring, summary, start,
+    sendHa, checkLowStock, expiryChanged, notifyExpiring, notifyOverdueLending, lendingChanged, summary, start,
     config: { haConfigured: !!HA_WEBHOOK_URL, appUrl: APP_URL || null, notifyDays: NOTIFY_DAYS, notifyHour: NOTIFY_HOUR, backupHour: BACKUP_HOUR, backupKeep: BACKUP_KEEP },
   };
 }

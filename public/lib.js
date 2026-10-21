@@ -51,6 +51,11 @@ const ICONS = {
   image: 'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5M15.5 9h.01',
   qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2',
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  check: 'M5 12l5 5L20 7',
+  undo: 'M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3',
+  cart: 'M3 4h2l2.5 11h11L21 7H6.2M9 20h.01M18 20h.01',
+  hand: 'M7 11V6a1.5 1.5 0 0 1 3 0v4M10 10V4.5a1.5 1.5 0 0 1 3 0V10M13 10V5.5a1.5 1.5 0 0 1 3 0V12M16 9.5a1.5 1.5 0 0 1 3 0V14a7 7 0 0 1-7 7h-.5A6.5 6.5 0 0 1 6 17.5L3.5 13a1.5 1.5 0 0 1 2.6-1.5L7 13',
+  select: 'M4 4h6v6H4zM14 6h6M14 8h4M4 14h6v6H4zM14 16h6M14 18h4',
   shield: 'M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z',
 };
 export function icon(name) {
@@ -119,10 +124,11 @@ export function expiryText(iso) {
 export const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
 // ---------- toasts & dialogs ----------
-export function toast(msg, isErr) {
-  const el = h('div', { class: 'toast' + (isErr ? ' err' : '') }, msg);
+export function toast(msg, isErr, action) {
+  const el = h('div', { class: 'toast' + (isErr ? ' err' : '') + (action ? ' has-action' : '') }, msg,
+    action && h('button', { class: 'toast-btn', onclick: () => { el.remove(); action.fn(); } }, action.label));
   document.getElementById('toasts').append(el);
-  setTimeout(() => el.remove(), isErr ? 5000 : 2500);
+  setTimeout(() => el.remove(), action ? 7000 : isErr ? 5000 : 2500);
 }
 export function openDialog(build) {
   return new Promise((resolve) => {

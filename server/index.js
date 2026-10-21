@@ -44,6 +44,7 @@ const dateOrNull = (v) => {
   return String(v);
 };
 const bool = (v) => (v ? 1 : 0);
+const num = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
 
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
@@ -182,6 +183,8 @@ function listThings(q) {
     where.push("t.expires_on IS NOT NULL AND t.expires_on <= date('now', ?)"); args.push(`+${days} days`);
   }
   if (q.favourite === '1') where.push('t.favourite = 1');
+  if (q.lent === '1') where.push('t.lent_to IS NOT NULL');
+  if (q.shopping === '1') where.push('t.is_container = 0 AND (t.on_list = 1 OR (t.min_quantity IS NOT NULL AND t.quantity <= t.min_quantity))');
   const sorts = {
     name: 't.is_container DESC, t.name COLLATE NOCASE',
     updated: 't.updated_at DESC',
@@ -225,6 +228,9 @@ function validateThingInput(b, partial) {
   if ('min_quantity' in b) out.min_quantity = numOrNull(b.min_quantity);
   if ('barcode' in b) out.barcode = str(b.barcode, 100) || null;
   if ('nfc_id' in b) out.nfc_id = str(b.nfc_id, 100).toLowerCase() || null;
+  if ('lent_to' in b) out.lent_to = str(b.lent_to, 100) || null;
+  if ('lent_due' in b) out.lent_due = dateOrNull(b.lent_due);
+  if ('on_list' in b) out.on_list = bool(b.on_list);
   if ('price' in b) out.price = numOrNull(b.price);
   if ('expires_on' in b) out.expires_on = dateOrNull(b.expires_on);
   if ('favourite' in b) out.favourite = bool(b.favourite);
@@ -276,7 +282,12 @@ function updateThing(user, id, b) {
     if (descendantIds(id).includes(v.parent_id)) throw bad('Je kunt een item niet in zichzelf of een onderliggend item plaatsen');
   }
   tx(db, () => {
-    const fields = ['parent_id', 'is_container', 'name', 'description', 'notes', 'quantity', 'min_quantity', 'barcode', 'nfc_id', 'price', 'expires_on', 'favourite'];
+    // Uitlenen: datum vastleggen zodra iemand het krijgt; alles leeg bij terugbrengen.
+    if ('lent_to' in v) {
+      if (!v.lent_to) { v.lent_at = null; v.lent_due = null; }
+      else if (v.lent_to !== cur.lent_to) v.lent_at = now();
+    }
+    const fields = ['parent_id', 'is_container', 'name', 'description', 'notes', 'quantity', 'min_quantity', 'barcode', 'nfc_id', 'price', 'expires_on', 'favourite', 'lent_to', 'lent_at', 'lent_due', 'on_list'];
     const sets = [], args = [];
     for (const f of fields) if (f in v) { sets.push(`${f} = ?`); args.push(v[f]); }
     sets.push('version = version + 1', 'updated_by = ?', 'updated_at = ?');
@@ -285,9 +296,12 @@ function updateThing(user, id, b) {
     if (v.nfc_id) releaseNfc(v.nfc_id, id);
     if (v.tag_ids) setTags(id, v.tag_ids);
     const moved = 'parent_id' in v && v.parent_id !== cur.parent_id;
-    logActivity(user, id, moved ? 'move' : 'update', `${user.display_name} ${moved ? 'verplaatste' : 'wijzigde'} "${v.name || cur.name}"`);
+    const lent = 'lent_to' in v && v.lent_to !== cur.lent_to;
+    if (lent) logActivity(user, id, 'lend', v.lent_to ? `${user.display_name} leende "${v.name || cur.name}" uit aan ${v.lent_to}` : `"${v.name || cur.name}" is terug (was uitgeleend aan ${cur.lent_to})`);
+    else logActivity(user, id, moved ? 'move' : 'update', `${user.display_name} ${moved ? 'verplaatste' : 'wijzigde'} "${v.name || cur.name}"`);
   });
   if ('expires_on' in v && v.expires_on !== cur.expires_on) jobs.expiryChanged(id);
+  if (('lent_to' in v && v.lent_to !== cur.lent_to) || ('lent_due' in v && v.lent_due !== cur.lent_due)) jobs.lendingChanged(id);
 }
 
 function deleteImageFiles(rows) {
@@ -297,17 +311,76 @@ function deleteImageFiles(rows) {
     }
   }
 }
+// Verwijderen = naar de prullenbak: de hele (sub)boom als momentopname bewaren, 30 dagen herstelbaar.
+const TRASH_DIR = path.join(IMG_DIR, 'trash');
+fs.mkdirSync(TRASH_DIR, { recursive: true });
+const TRASH_DAYS = Math.max(1, Number(process.env.TRASH_DAYS || 30));
+const inList = (ids) => ids.map(() => '?').join(',');
 function deleteThing(user, id) {
   const cur = db.prepare('SELECT * FROM things WHERE id = ?').get(id);
   if (!cur) throw new HttpError(404, 'Niet gevonden');
   const ids = descendantIds(id);
-  const imgs = db.prepare(`SELECT id, ext FROM images WHERE thing_id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+  const things = db.prepare(`SELECT * FROM things WHERE id IN (${inList(ids)})`).all(...ids);
+  const order = new Map(ids.map((x, i) => [x, i]));
+  things.sort((a, b) => order.get(a.id) - order.get(b.id)); // ouders vóór kinderen
+  const tags = db.prepare(`SELECT * FROM thing_tags WHERE thing_id IN (${inList(ids)})`).all(...ids);
+  const imgs = db.prepare(`SELECT * FROM images WHERE thing_id IN (${inList(ids)})`).all(...ids);
+  let trashId;
   tx(db, () => {
+    trashId = Number(db.prepare('INSERT INTO trash(thing_id,name,is_container,item_count,parent_id,payload,deleted_by,deleted_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, cur.name, cur.is_container, ids.length, cur.parent_id, JSON.stringify({ things, tags, images: imgs }), user.id, now()).lastInsertRowid);
     db.prepare('DELETE FROM things WHERE id = ?').run(id); // cascade naar kinderen, tags, afbeeldingen
     logActivity(user, null, 'delete', `${user.display_name} verwijderde "${cur.name}"${ids.length > 1 ? ` en ${ids.length - 1} onderliggende items` : ''}`);
   });
-  deleteImageFiles(imgs);
+  for (const im of imgs) for (const suffix of ['', '.thumb']) {
+    try { fs.renameSync(path.join(IMG_DIR, `${im.id}${suffix}.${im.ext}`), path.join(TRASH_DIR, `${im.id}${suffix}.${im.ext}`)); } catch { /* */ }
+  }
+  return trashId;
 }
+function trashImageFiles(payload) {
+  for (const im of payload.images || []) for (const suffix of ['', '.thumb']) { try { fs.unlinkSync(path.join(TRASH_DIR, `${im.id}${suffix}.${im.ext}`)); } catch { /* */ } }
+}
+function restoreTrash(user, trashId) {
+  const row = db.prepare('SELECT * FROM trash WHERE id = ?').get(trashId);
+  if (!row) throw new HttpError(404, 'Niet (meer) in de prullenbak');
+  const p = JSON.parse(row.payload);
+  const idMap = new Map(), imgMoves = [];
+  let rootId;
+  tx(db, () => {
+    const free = (table, idv) => !db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(idv);
+    for (const t of p.things) {
+      let parent = t.parent_id;
+      if (idMap.has(parent)) parent = idMap.get(parent);
+      else if (parent != null && free('things', parent)) parent = null; // oude plek bestaat niet meer: hoofdniveau
+      const cols = Object.keys(t).filter((k) => k !== 'id' && k !== 'parent_id');
+      const useId = free('things', t.id);
+      const r = db.prepare(`INSERT INTO things(${useId ? 'id,' : ''}parent_id,${cols.join(',')}) VALUES(${useId ? '?,' : ''}?,${cols.map(() => '?').join(',')})`)
+        .run(...(useId ? [t.id] : []), parent, ...cols.map((k) => t[k]));
+      idMap.set(t.id, useId ? t.id : Number(r.lastInsertRowid));
+    }
+    rootId = idMap.get(row.thing_id);
+    for (const tt of p.tags) if (db.prepare('SELECT 1 FROM tags WHERE id = ?').get(tt.tag_id)) db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) VALUES(?, ?)').run(idMap.get(tt.thing_id), tt.tag_id);
+    for (const im of p.images) {
+      const useId = free('images', im.id);
+      const r = db.prepare(`INSERT INTO images(${useId ? 'id,' : ''}thing_id,mime,ext,has_thumb,position,created_by,created_at) VALUES(${useId ? '?,' : ''}?,?,?,?,?,?,?)`)
+        .run(...(useId ? [im.id] : []), idMap.get(im.thing_id), im.mime, im.ext, im.has_thumb, im.position, im.created_by, im.created_at);
+      imgMoves.push([im, useId ? im.id : Number(r.lastInsertRowid)]);
+    }
+    db.prepare('DELETE FROM trash WHERE id = ?').run(trashId);
+    logActivity(user, rootId, 'restore', `${user.display_name} zette "${row.name}" terug uit de prullenbak`);
+  });
+  for (const [im, nid] of imgMoves) for (const suffix of ['', '.thumb']) {
+    try { fs.renameSync(path.join(TRASH_DIR, `${im.id}${suffix}.${im.ext}`), path.join(IMG_DIR, `${nid}${suffix}.${im.ext}`)); } catch { /* */ }
+  }
+  return rootId;
+}
+function purgeTrash(olderThanDays) {
+  const cutoff = new Date(Date.now() - olderThanDays * 86400e3).toISOString();
+  const rows = db.prepare('SELECT id, payload FROM trash WHERE deleted_at < ?').all(cutoff);
+  for (const r of rows) { trashImageFiles(JSON.parse(r.payload)); db.prepare('DELETE FROM trash WHERE id = ?').run(r.id); }
+  return rows.length;
+}
+setInterval(() => { try { purgeTrash(TRASH_DAYS); } catch (e) { console.error('Prullenbak opruimen mislukt:', e.message); } }, 6 * 3600e3).unref();
 
 // ---------- router ----------
 const routes = [];
@@ -433,9 +506,9 @@ route('POST', '/api/things/:id/adjust', USER, async ({ req, params, user }) => {
   return { thing: getThing(id) };
 });
 route('DELETE', '/api/things/:id', USER, ({ req, params, user }) => {
-  deleteThing(user, Number(params.id));
+  const trash_id = deleteThing(user, Number(params.id));
   changed(user, 'thing', null, req);
-  return { ok: true };
+  return { ok: true, trash_id };
 });
 
 // tags
@@ -542,9 +615,11 @@ route('GET', '/api/stats', USER, () => {
     COALESCE(SUM(CASE WHEN is_container = 0 THEN quantity END), 0) AS total_quantity,
     COALESCE(SUM(CASE WHEN is_container = 0 AND price IS NOT NULL THEN price * quantity END), 0) AS total_value,
     SUM(is_container = 0 AND min_quantity IS NOT NULL AND quantity <= min_quantity) AS low,
-    SUM(expires_on IS NOT NULL AND expires_on <= date('now', '+30 days')) AS expiring
+    SUM(expires_on IS NOT NULL AND expires_on <= date('now', '+30 days')) AS expiring,
+    SUM(lent_to IS NOT NULL) AS lent,
+    SUM(is_container = 0 AND (on_list = 1 OR (min_quantity IS NOT NULL AND quantity <= min_quantity))) AS shopping
     FROM things`).get();
-  return { stats: { items: s.items || 0, containers: s.containers || 0, total_quantity: s.total_quantity, total_value: s.total_value, low: s.low || 0, expiring: s.expiring || 0 } };
+  return { stats: { items: s.items || 0, containers: s.containers || 0, total_quantity: s.total_quantity, total_value: s.total_value, low: s.low || 0, expiring: s.expiring || 0, lent: s.lent || 0, shopping: s.shopping || 0 } };
 });
 route('GET', '/api/activity', USER, ({ query }) => ({
   activity: db.prepare('SELECT a.id, a.action, a.summary, a.at, a.thing_id, u.display_name AS user FROM activity a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT ?')
@@ -579,6 +654,90 @@ route('GET', '/api/export.csv', USER, ({ res }) => {
   res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="mijn-spullen-${new Date().toISOString().slice(0, 10)}.csv"`, 'Content-Length': body.length });
   res.end(body);
   return res;
+});
+
+// ---------- prullenbak ----------
+route('GET', '/api/trash', USER, () => ({
+  days: TRASH_DAYS,
+  items: db.prepare('SELECT t.id, t.thing_id, t.name, t.is_container, t.item_count, t.deleted_at, u.display_name AS deleted_by FROM trash t LEFT JOIN users u ON u.id = t.deleted_by ORDER BY t.id DESC LIMIT 200').all()
+    .map((r) => ({ ...r, is_container: !!r.is_container })),
+}));
+route('POST', '/api/trash/:id/restore', USER, ({ req, params, user }) => {
+  const id = restoreTrash(user, Number(params.id));
+  changed(user, 'thing', id, req);
+  return { thing: getThing(id) };
+});
+route('DELETE', '/api/trash/:id', ADMIN, ({ params }) => {
+  const r = db.prepare('SELECT payload FROM trash WHERE id = ?').get(Number(params.id));
+  if (!r) throw new HttpError(404, 'Niet gevonden');
+  trashImageFiles(JSON.parse(r.payload));
+  db.prepare('DELETE FROM trash WHERE id = ?').run(Number(params.id));
+  return { ok: true };
+});
+route('DELETE', '/api/trash', ADMIN, () => ({ purged: purgeTrash(-1) }));
+
+// ---------- meerdere tegelijk ----------
+route('POST', '/api/things/bulk', USER, async ({ req, user }) => {
+  const b = await readJson(req);
+  const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Number.isInteger))].slice(0, 1000);
+  if (!ids.length) throw bad('Niets geselecteerd');
+  const existing = ids.filter((id) => db.prepare('SELECT 1 FROM things WHERE id = ?').get(id));
+  let done = 0;
+  if (b.action === 'delete') {
+    // Kinderen van iets dat zelf ook weg gaat, niet apart verwijderen.
+    const all = new Set(existing);
+    const roots = existing.filter((id) => !pathOf(allNames(), id).slice(0, -1).some((p) => all.has(p.id)));
+    for (const id of roots) { if (db.prepare('SELECT 1 FROM things WHERE id = ?').get(id)) { deleteThing(user, id); done++; } }
+  } else if (b.action === 'move') {
+    const parent = b.parent_id == null || b.parent_id === '' ? null : Number(b.parent_id);
+    if (parent != null && !db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = 1').get(parent)) throw bad('Doel bestaat niet of is geen container');
+    for (const id of existing) {
+      if (parent != null && descendantIds(id).includes(parent)) continue; // niet in zichzelf
+      updateThing(user, id, { parent_id: parent }); done++;
+    }
+  } else if (b.action === 'tag' || b.action === 'untag') {
+    const tag = Number(b.tag_id);
+    if (!db.prepare('SELECT 1 FROM tags WHERE id = ?').get(tag)) throw bad('Tag bestaat niet');
+    tx(db, () => {
+      for (const id of existing) {
+        const r = b.action === 'tag'
+          ? db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) VALUES(?, ?)').run(id, tag)
+          : db.prepare('DELETE FROM thing_tags WHERE thing_id = ? AND tag_id = ?').run(id, tag);
+        if (r.changes) { db.prepare('UPDATE things SET version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?').run(user.id, now(), id); done++; }
+      }
+    });
+  } else if (b.action === 'favourite' || b.action === 'list') {
+    const col = b.action === 'favourite' ? 'favourite' : 'on_list';
+    for (const id of existing) { db.prepare(`UPDATE things SET ${col} = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?`).run(bool(b.value), user.id, now(), id); done++; }
+  } else throw bad('Onbekende actie');
+  if (b.action !== 'delete') logActivity(user, null, 'bulk', `${user.display_name} paste ${done} spullen tegelijk aan (${b.action})`);
+  changed(user, 'thing', null, req);
+  return { done };
+});
+
+// ---------- boodschappenlijst ----------
+route('POST', '/api/things/:id/bought', USER, async ({ req, params, user }) => {
+  const id = Number(params.id);
+  const cur = db.prepare('SELECT * FROM things WHERE id = ?').get(id);
+  if (!cur) throw new HttpError(404, 'Niet gevonden');
+  const add = numOrNull((await readJson(req)).quantity);
+  if (add == null || add < 0) throw bad('Aantal ontbreekt');
+  const nq = cur.quantity + add;
+  tx(db, () => {
+    db.prepare('UPDATE things SET quantity = ?, on_list = 0, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?').run(nq, user.id, now(), id);
+    logActivity(user, id, 'bought', `${user.display_name} kocht ${num(add)}× "${cur.name}" (nu ${num(nq)})`);
+  });
+  changed(user, 'thing', id, req);
+  jobs.checkLowStock(id);
+  return { thing: getThing(id) };
+});
+route('POST', '/api/shopping/send', USER, async ({ user }) => {
+  const rows = listThings({ shopping: '1', limit: 500 });
+  if (!rows.length) throw bad('De boodschappenlijst is leeg');
+  const items = rows.map((t) => ({ id: t.id, name: t.name, quantity: t.quantity, min_quantity: t.min_quantity, need: t.min_quantity != null ? Math.max(1, t.min_quantity - t.quantity + 1) : 1, location: t.path.map((p) => p.name).join(' › ') }));
+  const r = await jobs.sendHa({ event: 'shopping', title: 'Boodschappenlijst', message: `${user.display_name} stuurde ${items.length} ${items.length === 1 ? 'product' : 'producten'}: ${items.map((i) => i.name).join(', ')}`, items });
+  if (!r.ok) throw bad(`Versturen naar Home Assistant mislukt: ${r.reason || 'status ' + r.status}`);
+  return { sent: items.length };
 });
 
 // ---------- API-tokens (Home Assistant, scripts, native app) ----------
