@@ -8,6 +8,7 @@ const { parseCsv, rowsToRecords } = require('./csv');
 const { lookupBarcode, fetchImage } = require('./lookup');
 const { writeTar } = require('./tar');
 const { createJobs } = require('./jobs');
+const fms = require('./fms');
 
 const VERSION = require('../package.json').version;
 const PORT = Number(process.env.PORT || 3000);
@@ -511,6 +512,8 @@ route('PUT', '/api/images/:id/thumb', USER, async ({ req, params }) => {
   db.prepare('UPDATE images SET has_thumb = 1 WHERE id = ?').run(img.id);
   return { ok: true };
 });
+// Foto's zonder thumbnail (na een import): de browser maakt ze en stuurt ze terug via PUT /api/images/:id/thumb.
+route('GET', '/api/images-without-thumb', USER, () => ({ ids: db.prepare('SELECT id FROM images WHERE has_thumb = 0 ORDER BY id LIMIT 2000').all().map((r) => r.id) }));
 route('GET', '/api/images/:id', USER, ({ params, query, res }) => {
   const img = db.prepare('SELECT * FROM images WHERE id = ?').get(Number(params.id));
   if (!img) throw new HttpError(404, 'Niet gevonden');
@@ -654,6 +657,47 @@ route('POST', '/api/import.csv', USER, async ({ req, query, user }) => {
   const stats = importRecords(user, parsed.records, { dryRun, skipDuplicates: query.skip_duplicates !== '0' });
   if (!dryRun) changed(user, 'thing', null, req);
   return { dry_run: dryRun, rows: parsed.records.length, columns: parsed.columns, ...stats };
+});
+
+// ---------- Find my stuff-back-up (.bckp) importeren ----------
+// Stap 1 uploadt en toont een overzicht; stap 2 voert de import uit op hetzelfde bestand (geen tweede upload van ~100 MB).
+const FMS_DIR = path.join(DATA_DIR, 'tmp');
+fs.mkdirSync(FMS_DIR, { recursive: true });
+const fmsFile = (token) => (/^[a-f0-9]{32}$/.test(token) ? path.join(FMS_DIR, `fms-${token}.zip`) : null);
+setInterval(() => {
+  for (const f of fs.readdirSync(FMS_DIR)) {
+    const full = path.join(FMS_DIR, f);
+    try { if (Date.now() - fs.statSync(full).mtimeMs > 3600e3) fs.unlinkSync(full); } catch { /* */ }
+  }
+}, 15 * 60e3).unref();
+route('POST', '/api/import/findmystuff', ADMIN, async ({ req }) => {
+  const buf = await readBody(req, 300 * 1024 * 1024);
+  if (!buf.length) throw bad('Leeg bestand');
+  let parsed;
+  try { parsed = fms.parseBackup(buf); } catch (e) { throw bad(e.message); }
+  const token = require('node:crypto').randomBytes(16).toString('hex');
+  fs.writeFileSync(fmsFile(token), buf);
+  return { token, summary: fms.summarize(parsed), sample: parsed.things.slice(0, 8).map((t) => t.name) };
+});
+route('POST', '/api/import/findmystuff/:token', ADMIN, async ({ req, params, user }) => {
+  const file = fmsFile(params.token);
+  if (!file || !fs.existsSync(file)) throw new HttpError(404, 'Upload verlopen, probeer het opnieuw');
+  const b = await readJson(req);
+  const parentId = b.parent_id ? Number(b.parent_id) : null;
+  if (parentId && !db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = 1').get(parentId)) throw bad('Doelcontainer bestaat niet');
+  const parsed = fms.parseBackup(fs.readFileSync(file));
+  const stats = fms.importBackup(parsed, {
+    db, tx, user, now, parentId,
+    storeImageFile: (thingId, data, mime, position) => {
+      const ext = IMAGE_TYPES[mime];
+      const id = Number(db.prepare('INSERT INTO images(thing_id,mime,ext,position,created_by,created_at) VALUES(?,?,?,?,?,?)').run(thingId, mime, ext, position, user.id, now()).lastInsertRowid);
+      fs.writeFileSync(path.join(IMG_DIR, `${id}.${ext}`), data);
+    },
+  });
+  fs.unlink(file, () => {});
+  changed(user, 'thing', null, req);
+  changed(user, 'tag', null, req);
+  return { stats };
 });
 
 // ---------- back-ups (beheerder) ----------

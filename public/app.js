@@ -1,4 +1,4 @@
-import { CLIENT_ID, h, flat, icon, api, ApiError, setUnauthorizedHandler, money, num, daysUntil, fmtDate, expiryText, debounce, toast, openDialog, confirmDialog, uploadPhoto } from './lib.js';
+import { CLIENT_ID, h, flat, icon, api, ApiError, setUnauthorizedHandler, money, num, daysUntil, fmtDate, expiryText, debounce, toast, openDialog, confirmDialog, uploadPhoto, shrinkImage } from './lib.js';
 import { nfcSupported, readTag, linkTag } from './nfc.js';
 import { qrSvg } from './qr.js';
 
@@ -686,7 +686,8 @@ async function viewMore(token) {
       h('div', { class: 'card' }, h('div', { class: 'actions' },
         h('a', { class: 'btn', href: '/api/export.csv', download: true }, icon('download'), 'Exporteer als CSV'),
         h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
-        h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'))),
+        h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
+        isAdmin && h('button', { class: 'btn', onclick: () => fmsDialog().then((ok) => ok && draw()) }, icon('upload'), 'Find my stuff importeren'))),
       isAdmin && h('div', { class: 'section-title' }, "Back-ups"),
       isAdmin && h('div', { class: 'card' },
         h('p', { class: 'meta', style: 'margin:0 0 8px' }, `Elke nacht om ${backups.config.backupHour}:00 een kopie van de database; de laatste ${backups.config.backupKeep} blijven bewaard (in het volume onder /data/backups). De volledige download bevat ook alle foto's.`),
@@ -731,6 +732,68 @@ function tokenDialog() {
     h('h2', {}, 'Nieuw API-token'), h('div', { class: 'field pre' }, h('label', {}, 'Waarvoor?'), name), h('div', { class: 'pre' }, err), box,
     h('div', { class: 'dlg-actions pre' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary', type: 'submit' }, 'Aanmaken')));
     return form;
+  });
+}
+// Thumbnails maken voor foto's die er nog geen hebben (na een import); draait in de browser.
+async function makeMissingThumbs(onProgress) {
+  const { ids } = await api('GET', '/api/images-without-thumb');
+  let done = 0;
+  for (const id of ids) {
+    try {
+      const r = await fetch(`/api/images/${id}`, { credentials: 'same-origin' });
+      if (r.ok) {
+        const thumb = await shrinkImage(await r.blob(), 320, 0.7);
+        await api('PUT', `/api/images/${id}/thumb`, thumb, { 'Content-Type': 'image/jpeg' });
+      }
+    } catch { /* volgende */ }
+    onProgress(++done, ids.length);
+  }
+  return ids.length;
+}
+function fmsDialog() {
+  return openDialog((close) => {
+    const file = h('input', { type: 'file', accept: '.bckp,.zip,application/zip,application/octet-stream' });
+    const out = h('div');
+    const err = h('div', { class: 'error' });
+    const status = h('p', { class: 'meta', style: 'margin:0' });
+    const btn = h('button', { class: 'btn primary', type: 'button' }, 'Uploaden en controleren');
+    let busy = false;
+    btn.onclick = async () => {
+      if (busy) return;
+      err.textContent = '';
+      const f = file.files[0];
+      if (!f) { err.textContent = 'Kies eerst het .bckp-bestand'; return; }
+      busy = true; btn.disabled = true;
+      status.textContent = `Uploaden (${(f.size / 1048576).toFixed(0)} MB)… dit kan even duren.`;
+      try {
+        const r = await api('POST', '/api/import/findmystuff', f, { 'Content-Type': 'application/zip' });
+        const s = r.summary;
+        status.textContent = '';
+        out.replaceChildren(
+          h('p', { style: 'margin:0' }, `Gevonden: ${s.containers} containers, ${s.items} items, ${s.tags} tags, ${s.images_found} van ${s.images} foto's, ${s.barcodes} barcodes.`),
+          h('p', { class: 'meta', style: 'margin:4px 0 0' }, `Bijv. ${r.sample.join(', ')}…`),
+          h('p', { class: 'meta', style: 'margin:4px 0 0' }, 'Alles wordt toegevoegd naast wat er al staat; tags met dezelfde naam worden hergebruikt.'),
+          h('div', { class: 'dlg-actions' },
+            h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'),
+            h('button', { class: 'btn primary', type: 'button', onclick: async (e) => {
+              e.currentTarget.disabled = true;
+              status.textContent = 'Importeren…';
+              try {
+                const { stats } = await api('POST', `/api/import/findmystuff/${r.token}`, {});
+                await loadTags();
+                status.textContent = 'Thumbnails maken…';
+                await makeMissingThumbs((n, t) => { status.textContent = `Thumbnails maken… ${n}/${t}`; });
+                toast(`Geïmporteerd: ${stats.created_things} spullen, ${stats.imported_images} foto's`);
+                close(true);
+              } catch (ex) { err.textContent = ex.message; status.textContent = ''; }
+            } }, 'Importeren')));
+        btn.remove();
+      } catch (ex) { err.textContent = ex.message; status.textContent = ''; btn.disabled = false; busy = false; }
+    };
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Find my stuff importeren'),
+      h('p', { class: 'meta', style: 'margin:0' }, 'Kies de back-up uit Find my stuff (.bckp, te vinden in Google Drive onder com.miquelcms.homeorganizer.backups). Containers, items, tags, barcodes, prijzen en foto\'s komen mee.'),
+      file, status, err, out,
+      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Sluiten'), btn));
   });
 }
 function importDialog() {

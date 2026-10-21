@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.2.0
+# Mijn Spullen — 0.3.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,13 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.3
+
+- **Find my stuff-back-up importeren** (*Meer → Find my stuff importeren*, beheerder): upload het `.bckp`-bestand
+  (zip met `backup.txt` + foto's), bekijk het overzicht en importeer. Containers, items, tags (kleur benaderd),
+  barcodes, prijzen (centen → euro), houdbaarheid, aankoopdatum (in notities) en alle foto's komen mee.
+  Thumbnails worden daarna in de browser gemaakt. Zet in NPM `client_max_body_size 200m;` voor grote back-ups.
 
 ### Nieuw in 0.2
 
