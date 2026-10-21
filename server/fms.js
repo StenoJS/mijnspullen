@@ -124,4 +124,7 @@ function importBackup(b, ctx) {
   return stats;
 }
 
-module.exports = { parseBackup, summarize, importBackup };
+// Vingerafdruk van de inhoud (los van de bestandsnaam), om dubbel importeren te herkennen.
+const fingerprint = (b) => require('node:crypto').createHash('sha256').update(JSON.stringify(b.things.map((t) => [t.id, t.name, t.parentId]))).digest('hex').slice(0, 16);
+
+module.exports = { parseBackup, summarize, importBackup, fingerprint };

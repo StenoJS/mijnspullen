@@ -92,4 +92,15 @@ test('Find my stuff-back-up importeren', async () => {
   assert.equal(ap2.matched_things, 5, 'ook beide Trivial Pursuits');
   assert.equal(ap2.imported_images, 0, 'had al foto\'s');
   assert.equal((await call('GET', '/api/things?q=trivial')).body.things.length, 2);
+  assert.ok(up2.body.already_imported, 'herkent een eerdere import');
+
+  // Alles wissen: eerst bevestiging, dan back-up + leeg
+  assert.equal((await call('POST', '/api/wipe', JSON.stringify({ confirm: 'nee' }), 'application/json')).status, 400);
+  const w = await call('POST', '/api/wipe', JSON.stringify({ confirm: 'WISSEN' }), 'application/json');
+  assert.equal(w.body.deleted_things, 5);
+  assert.ok((await call('GET', '/api/backups')).body.backups.some((x) => x.name === w.body.backup));
+  assert.equal((await call('GET', '/api/things?q=trivial')).body.things.length, 0);
+  assert.equal((await call('GET', '/api/images-without-thumb')).body.ids.length, 0);
+  const up3 = await call('POST', '/api/import/findmystuff', zip, 'application/zip');
+  assert.equal(up3.body.already_imported, null, 'na wissen weer schoon');
 });

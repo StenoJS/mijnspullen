@@ -677,7 +677,8 @@ route('POST', '/api/import/findmystuff', ADMIN, async ({ req }) => {
   try { parsed = fms.parseBackup(buf); } catch (e) { throw bad(e.message); }
   const token = require('node:crypto').randomBytes(16).toString('hex');
   fs.writeFileSync(fmsFile(token), buf);
-  return { token, summary: fms.summarize(parsed), sample: parsed.things.slice(0, 8).map((t) => t.name) };
+  const prev = db.prepare('SELECT value FROM meta WHERE key = ?').get(`fms_import_${fms.fingerprint(parsed)}`);
+  return { token, summary: fms.summarize(parsed), sample: parsed.things.slice(0, 8).map((t) => t.name), already_imported: prev ? prev.value : null };
 });
 route('POST', '/api/import/findmystuff/:token', ADMIN, async ({ req, params, user }) => {
   const file = fmsFile(params.token);
@@ -695,9 +696,28 @@ route('POST', '/api/import/findmystuff/:token', ADMIN, async ({ req, params, use
     },
   });
   fs.unlink(file, () => {});
+  db.prepare("INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(`fms_import_${fms.fingerprint(parsed)}`, now());
   changed(user, 'thing', null, req);
   changed(user, 'tag', null, req);
   return { stats };
+});
+
+// Alles wissen (bijv. na een mislukte of dubbele import). Maakt eerst een back-up; gebruikers en API-tokens blijven.
+route('POST', '/api/wipe', ADMIN, async ({ req, user }) => {
+  const b = await readJson(req);
+  if (b.confirm !== 'WISSEN') throw bad('Typ WISSEN om te bevestigen');
+  const backup = jobs.makeBackup(new Date().toISOString().slice(0, 19).replace(/:/g, '-'));
+  const imgs = db.prepare('SELECT id, ext FROM images').all();
+  const counts = db.prepare('SELECT (SELECT COUNT(*) FROM things) things, (SELECT COUNT(*) FROM tags) tags').get();
+  tx(db, () => {
+    db.exec("DELETE FROM things; DELETE FROM notified; DELETE FROM meta WHERE key LIKE 'fms_import_%';");
+    if (b.tags) db.exec('DELETE FROM tags;');
+    logActivity(user, null, 'wipe', `${user.display_name} wiste alle spullen (${counts.things})${b.tags ? ' en tags' : ''}; back-up ${backup}`);
+  });
+  deleteImageFiles(imgs);
+  changed(user, 'thing', null, req);
+  changed(user, 'tag', null, req);
+  return { ok: true, backup, deleted_things: counts.things, deleted_tags: b.tags ? counts.tags : 0 };
 });
 
 // ---------- back-ups (beheerder) ----------

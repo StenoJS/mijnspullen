@@ -688,6 +688,10 @@ async function viewMore(token) {
         h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
         h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
         isAdmin && h('button', { class: 'btn', onclick: () => fmsDialog().then((ok) => ok && draw()) }, icon('upload'), 'Find my stuff importeren'))),
+      isAdmin && h('div', { class: 'section-title' }, 'Opnieuw beginnen'),
+      isAdmin && h('div', { class: 'card' },
+        h('p', { class: 'meta', style: 'margin:0 0 8px' }, 'Wist alle containers, items en foto\'s (bijv. na een dubbele import). Er wordt eerst automatisch een back-up gemaakt. Gebruikers blijven bestaan.'),
+        h('button', { class: 'btn danger', onclick: () => wipeDialog().then((ok) => ok && draw()) }, icon('trash'), 'Alle spullen wissen')),
       isAdmin && h('div', { class: 'section-title' }, "Back-ups"),
       isAdmin && h('div', { class: 'card' },
         h('p', { class: 'meta', style: 'margin:0 0 8px' }, `Elke nacht om ${backups.config.backupHour}:00 een kopie van de database; de laatste ${backups.config.backupKeep} blijven bewaard (in het volume onder /data/backups). De volledige download bevat ook alle foto's.`),
@@ -774,6 +778,7 @@ function fmsDialog() {
           h('p', { style: 'margin:0' }, `Gevonden: ${s.containers} containers, ${s.items} items, ${s.tags} tags, ${s.images_found} van ${s.images} foto's, ${s.barcodes} barcodes.`),
           h('p', { class: 'meta', style: 'margin:4px 0 0' }, `Bijv. ${r.sample.join(', ')}…`),
           h('p', { class: 'meta', style: 'margin:4px 0 0' }, 'Alles wordt toegevoegd naast wat er al staat; tags met dezelfde naam worden hergebruikt.'),
+          r.already_imported && !attach.checked && h('div', { class: 'banner' }, `Deze back-up is al geïmporteerd op ${fmtDate(r.already_imported)}. Nog een keer importeren maakt alles dubbel. Vink hierboven "alleen aanvullen" aan, of wis eerst alles onder Meer.`),
           h('div', { class: 'dlg-actions' },
             h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'),
             h('button', { class: 'btn primary', type: 'button', onclick: async (e) => {
@@ -795,6 +800,26 @@ function fmsDialog() {
       h('p', { class: 'meta', style: 'margin:0' }, 'Kies de back-up uit Find my stuff (.bckp, te vinden in Google Drive onder com.miquelcms.homeorganizer.backups). Containers, items, tags, barcodes, prijzen en foto\'s komen mee.'),
       file, h('label', { class: 'check' }, attach, 'Al eerder geïmporteerd: alleen ontbrekende foto\'s en tags aanvullen'), status, err, out,
       h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Sluiten'), btn));
+  });
+}
+function wipeDialog() {
+  return openDialog((close) => {
+    const conf = h('input', { placeholder: 'WISSEN', autocapitalize: 'characters', 'aria-label': 'Bevestiging' });
+    const tags = h('input', { type: 'checkbox' });
+    const err = h('div', { class: 'error' });
+    return h('form', { class: 'dlg', onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api('POST', '/api/wipe', { confirm: conf.value.trim().toUpperCase(), tags: tags.checked });
+        toast(`${r.deleted_things} spullen gewist (back-up: ${r.backup})`);
+        if (tags.checked) await loadTags();
+        close(true);
+      } catch (ex) { err.textContent = ex.message; }
+    } },
+    h('h2', {}, 'Alle spullen wissen?'),
+    h('p', { style: 'margin:0;color:var(--muted)' }, 'Alle containers, items en foto\'s worden verwijderd. Vooraf wordt een back-up van de database gemaakt (foto\'s zitten daar niet in). Typ WISSEN om te bevestigen.'),
+    h('div', { class: 'field' }, conf), h('label', { class: 'check' }, tags, 'Ook alle tags wissen'), err,
+    h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary danger', type: 'submit', style: 'background:var(--danger);border-color:var(--danger);color:#fff' }, 'Wissen')));
   });
 }
 function importDialog() {
