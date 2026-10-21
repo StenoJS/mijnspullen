@@ -196,3 +196,9 @@ svg.qr { width: 100%; height: 100%; display: block; }
 .serial-log .new { background: var(--accent-soft); }
 .serial-log .err { background: var(--danger-soft); color: var(--danger); }
 .trash-row .sub { white-space: normal; }
+.dup-card { margin-bottom: 12px; }
+.dup-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.dup-row { cursor: pointer; }
+.dup-row input[type=radio] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+.dup-card .actions { align-items: center; }
+.dup-card .list { grid-template-columns: minmax(0, 1fr); }

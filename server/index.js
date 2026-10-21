@@ -715,6 +715,116 @@ route('POST', '/api/things/bulk', USER, async ({ req, user }) => {
   return { done };
 });
 
+// ---------- dubbelen vinden en samenvoegen ----------
+const normName = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+function findDuplicates() {
+  const map = allNames();
+  const pathKey = (id) => pathOf(map, id).map((p) => normName(p.name)).join('›');
+  const imgCount = new Map(db.prepare('SELECT thing_id, COUNT(*) c FROM images GROUP BY thing_id').all().map((r) => [r.thing_id, r.c]));
+  const groups = new Map();
+  for (const t of map.values()) {
+    const key = `${t.is_container ? 'c' : 'i'}|${t.parent_id ? pathKey(t.parent_id) : ''}|${normName(t.name)}`;
+    (groups.get(key) || groups.set(key, []).get(key)).push(t.id);
+  }
+  const dup = [...groups.entries()].filter(([, ids]) => ids.length > 1);
+  // Groepen binnen een dubbele container vallen vanzelf mee bij het samenvoegen daarvan: niet apart tonen.
+  const inGroup = new Map();
+  for (const [key, ids] of dup) for (const id of ids) inGroup.set(id, key);
+  const nested = (ids) => {
+    const parents = ids.map((id) => map.get(id).parent_id);
+    return parents.every((p) => p && inGroup.has(p)) && new Set(parents).size > 1;
+  };
+  const subtree = (id) => {
+    const ids = descendantIds(id);
+    return { count: ids.length - 1, images: ids.reduce((s, x) => s + (imgCount.get(x) || 0), 0) };
+  };
+  const out = [];
+  let hidden = 0;
+  for (const [key, ids] of dup) {
+    if (nested(ids)) { hidden++; continue; }
+    const rows = decorate(db.prepare(`SELECT * FROM things WHERE id IN (${inList(ids)}) ORDER BY id`).all(...ids))
+      .map((r) => ({ ...r, path: pathOf(map, r.id).slice(0, -1), subtree: subtree(r.id) }));
+    const best = [...rows].sort((a, b) => (b.subtree.images - a.subtree.images) || (b.image_ids.length - a.image_ids.length) || (a.id - b.id))[0];
+    out.push({ key, kind: 'name', name: rows[0].name, is_container: rows[0].is_container, depth: rows[0].path.length, keep_id: best.id, things: rows });
+  }
+  // Zelfde barcode op verschillende plekken / met andere naam: wel tonen, niet automatisch samenvoegen.
+  const byCode = db.prepare(`SELECT barcode, GROUP_CONCAT(id) ids FROM things WHERE is_container = 0 AND barcode IS NOT NULL AND barcode != ''
+    GROUP BY barcode HAVING COUNT(*) > 1`).all();
+  for (const r of byCode) {
+    const ids = r.ids.split(',').map(Number);
+    if (new Set(ids.map((id) => inGroup.get(id) || `x${id}`)).size < 2) continue; // al gedekt door een naamgroep
+    const rows = decorate(db.prepare(`SELECT * FROM things WHERE id IN (${inList(ids)}) ORDER BY id`).all(...ids))
+      .map((t) => ({ ...t, path: pathOf(map, t.id).slice(0, -1), subtree: { count: 0, images: imgCount.get(t.id) || 0 } }));
+    const best = [...rows].sort((a, b) => (b.image_ids.length - a.image_ids.length) || (a.id - b.id))[0];
+    out.push({ key: `b|${r.barcode}`, kind: 'barcode', name: rows[0].name, barcode: r.barcode, is_container: false, depth: 0, keep_id: best.id, things: rows });
+  }
+  out.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'name' ? -1 : 1) || (a.depth - b.depth) || a.name.localeCompare(b.name, 'nl'));
+  return { groups: out, hidden };
+}
+
+// Voegt drop samen in keep (binnen een transactie). Containers: inhoud verhuist, gelijknamige kinderen worden ook samengevoegd.
+function mergeInto(user, keep, drop, sumQty) {
+  const k = db.prepare('SELECT * FROM things WHERE id = ?').get(keep);
+  const d = db.prepare('SELECT * FROM things WHERE id = ?').get(drop);
+  if (!k || !d || keep === drop) return;
+  if (k.is_container) {
+    for (const child of db.prepare('SELECT * FROM things WHERE parent_id = ? ORDER BY id').all(drop)) {
+      const twin = db.prepare('SELECT * FROM things WHERE parent_id = ? AND is_container = ? ORDER BY id').all(keep, child.is_container)
+        .find((t) => normName(t.name) === normName(child.name));
+      if (twin) mergeInto(user, twin.id, child.id, sumQty);
+      else db.prepare('UPDATE things SET parent_id = ? WHERE id = ?').run(keep, child.id);
+    }
+  }
+  const set = {};
+  for (const f of ['description', 'barcode', 'price', 'expires_on', 'min_quantity', 'lent_to', 'lent_at', 'lent_due']) {
+    if ((k[f] == null || k[f] === '') && d[f] != null && d[f] !== '') set[f] = d[f];
+  }
+  if (d.notes && d.notes !== k.notes && !(k.notes || '').includes(d.notes)) set.notes = k.notes ? `${k.notes}\n${d.notes}` : d.notes;
+  if (d.nfc_id && !k.nfc_id) { db.prepare('UPDATE things SET nfc_id = NULL WHERE id = ?').run(drop); set.nfc_id = d.nfc_id; }
+  if (sumQty && !k.is_container) set.quantity = k.quantity + d.quantity;
+  if (d.favourite && !k.favourite) set.favourite = 1;
+  if (d.on_list && !k.on_list) set.on_list = 1;
+  const cols = Object.keys(set);
+  db.prepare(`UPDATE things SET ${cols.map((c) => `${c} = ?, `).join('')}version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?`)
+    .run(...cols.map((c) => set[c]), user.id, now(), keep);
+  db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) SELECT ?, tag_id FROM thing_tags WHERE thing_id = ?').run(keep, drop);
+  // Foto's alleen overnemen als het item dat blijft er nog geen heeft (anders zijn het meestal dezelfde).
+  if (!db.prepare('SELECT 1 FROM images WHERE thing_id = ?').get(keep)) db.prepare('UPDATE images SET thing_id = ? WHERE thing_id = ?').run(keep, drop);
+}
+function mergeGroup(user, keep, drops, sumQty) {
+  const k = db.prepare('SELECT * FROM things WHERE id = ?').get(keep);
+  if (!k) throw new HttpError(404, 'Het item dat moet blijven bestaat niet (meer)');
+  const valid = drops.filter((id) => id !== keep && db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = ?').get(id, k.is_container));
+  for (const id of valid) if (descendantIds(id).includes(keep)) throw bad('Kan een container niet samenvoegen met iets dat erin zit');
+  tx(db, () => { for (const id of valid) mergeInto(user, keep, id, sumQty); });
+  // Wat overblijft van de dubbelen (lege kopieën) gaat naar de prullenbak.
+  const trashIds = valid.filter((id) => db.prepare('SELECT 1 FROM things WHERE id = ?').get(id)).map((id) => deleteThing(user, id));
+  logActivity(user, keep, 'merge', `${user.display_name} voegde ${valid.length} ${valid.length === 1 ? 'dubbel' : 'dubbelen'} samen in "${k.name}"`);
+  return { merged: valid.length, trash_ids: trashIds };
+}
+route('GET', '/api/duplicates', USER, () => findDuplicates());
+route('POST', '/api/duplicates/merge', USER, async ({ req, user }) => {
+  const b = await readJson(req);
+  const keep = Number(b.keep_id);
+  const drops = [...new Set((Array.isArray(b.drop_ids) ? b.drop_ids : []).map(Number).filter(Number.isInteger))];
+  if (!drops.length) throw bad('Niets om samen te voegen');
+  const r = mergeGroup(user, keep, drops, !!b.sum_quantity);
+  changed(user, 'thing', null, req);
+  return r;
+});
+route('POST', '/api/duplicates/merge-all', ADMIN, async ({ req, user }) => {
+  const b = await readJson(req);
+  jobs.makeBackup(new Date().toISOString().slice(0, 19).replace(/:/g, '-'));
+  let groups = 0, merged = 0;
+  for (const g of findDuplicates().groups.filter((x) => x.kind === 'name')) {
+    if (!db.prepare('SELECT 1 FROM things WHERE id = ?').get(g.keep_id)) continue;
+    const r = mergeGroup(user, g.keep_id, g.things.map((t) => t.id), !!b.sum_quantity);
+    if (r.merged) { groups++; merged += r.merged; }
+  }
+  changed(user, 'thing', null, req);
+  return { groups, merged };
+});
+
 // ---------- boodschappenlijst ----------
 route('POST', '/api/things/:id/bought', USER, async ({ req, params, user }) => {
   const id = Number(params.id);

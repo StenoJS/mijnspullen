@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.4.0
+# Mijn Spullen — 0.4.1
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -30,6 +30,9 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   teller op het startscherm, en een Home Assistant-melding (`lend_overdue`) als de datum verstreken is.
 - **Boodschappenlijst** (*Meer → Boodschappen* of de tegel op het startscherm): alles wat bijna op is plus wat je
   zelf op de lijst zet. "Gekocht" hoogt het aantal op. Delen/kopiëren, of naar Home Assistant sturen (event `shopping`).
+- **Dubbelen opruimen** (0.4.1, *Meer → Dubbelen opruimen*): vindt spullen met dezelfde naam op dezelfde plek (en items
+  met dezelfde barcode). Kies welke blijft; tags, foto's en lege velden komen mee, containers worden inclusief inhoud
+  samengevoegd en de lege kopie gaat naar de prullenbak. Beheerder: "Alles samenvoegen" (met back-up vooraf).
 - **Serie-scannen** (bij *Toevoegen → Scannen in serie*): camera blijft open, elke scan in deze container doet +1 bij
   een bekend product of maakt een nieuw item aan (met naam en foto uit Open Food Facts).
 

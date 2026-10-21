@@ -123,6 +123,7 @@ async function route() {
     else if (seg[0] === 'labels') await viewLabels(Number(seg[1]) || null, q, token);
     else if (seg[0] === 'shopping') await viewShopping(token);
     else if (seg[0] === 'trash') await viewTrash(token);
+    else if (seg[0] === 'duplicates') await viewDuplicates(token);
     else await viewBrowse(null, token);
   } catch (e) {
     if (token !== routeToken || e.status === 401) return;
@@ -689,6 +690,52 @@ async function viewTrash(token) {
   await load();
 }
 
+// ============ dubbelen ============
+async function viewDuplicates(token) {
+  const load = async () => {
+    const r = await api('GET', '/api/duplicates');
+    if (stale(token)) return;
+    const isAdmin = S.me.role === 'admin';
+    const main = shell('Dubbelen', { back: '#/more', tab: 'more' });
+    const byName = r.groups.filter((g) => g.kind === 'name');
+    main.append(h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Spullen met dezelfde naam op dezelfde plek. Kies welke blijft: tags, foto\'s en lege velden van de andere gaan daarheen, de inhoud van containers wordt mee samengevoegd. De overgebleven kopie gaat naar de prullenbak.'));
+    if (!r.groups.length) { main.append(h('div', { class: 'empty' }, 'Geen dubbelen gevonden.')); return; }
+    if (isAdmin && byName.length > 1) {
+      main.append(h('div', { class: 'actions', style: 'margin:0 0 14px' }, h('button', { class: 'btn primary', onclick: async () => {
+        if (!await confirmDialog(`${byName.length} groepen in één keer samenvoegen?`, 'Per groep blijft de kopie met de meeste foto\'s. Aantallen worden niet opgeteld. Er wordt eerst een back-up gemaakt.')) return;
+        try { const x = await api('POST', '/api/duplicates/merge-all', {}); toast(`${x.merged} dubbelen samengevoegd in ${x.groups} groepen`); load(); } catch (ex) { toast(ex.message, true); }
+      } }, icon('link'), `Alles samenvoegen (${byName.length})`)));
+    }
+    for (const g of r.groups) {
+      let keep = g.keep_id;
+      const sum = h('input', { type: 'checkbox' });
+      const rows = g.things.map((t) => {
+        const radio = h('input', { type: 'radio', name: `keep-${g.key}`, checked: t.id === keep, onchange: () => { keep = t.id; } });
+        const facts = g.is_container
+          ? [`${t.subtree.count} onderdelen`, `${t.subtree.images} foto's`]
+          : [`aantal ${num(t.quantity)}`, `${t.image_ids.length} foto's`, t.tag_ids.length ? `${t.tag_ids.length} tags` : null, t.barcode && g.kind !== 'barcode' ? 'barcode' : null];
+        return h('div', { class: 'row dup-row', onclick: () => { radio.checked = true; keep = t.id; } }, radio,
+          h('div', { class: 'thumb' }, t.cover_image_id ? h('img', { src: `/api/images/${t.cover_image_id}?thumb=1`, loading: 'lazy', alt: '' }) : icon(t.is_container ? 'folder' : 'box')),
+          h('div', { class: 'main' }, h('div', { class: 'name' }, t.name),
+            h('div', { class: 'sub' }, [t.path.map((p) => p.name).join(' › ') || 'Hoofdniveau', ...facts.filter(Boolean)].join(' · '))),
+          h('a', { class: 'btn icon ghost', href: `#/${t.is_container ? 'c' : 't'}/${t.id}`, 'aria-label': 'Openen', onclick: (e) => e.stopPropagation() }, icon('chevron')));
+      });
+      main.append(h('div', { class: 'card dup-card' },
+        h('div', { class: 'dup-head' }, h('b', {}, g.name), h('span', { class: 'meta' }, g.kind === 'barcode' ? `zelfde barcode ${g.barcode}` : `${g.things.length}×${g.is_container ? ' container' : ''}`)),
+        h('div', { class: 'list' }, rows),
+        h('div', { class: 'actions', style: 'margin-top:8px' },
+          !g.is_container && h('label', { class: 'check' }, sum, 'Aantallen optellen'),
+          h('button', { class: 'btn primary', onclick: async () => {
+            try { const x = await api('POST', '/api/duplicates/merge', { keep_id: keep, drop_ids: g.things.map((t) => t.id).filter((id) => id !== keep), sum_quantity: sum.checked }); toast(`${x.merged} samengevoegd`); load(); }
+            catch (ex) { toast(ex.message, true); }
+          } }, icon('link'), 'Samenvoegen'))));
+    }
+    if (r.hidden) main.append(h('p', { class: 'meta' }, `${r.hidden} groepen binnen deze containers worden vanzelf mee samengevoegd.`));
+  };
+  refresh = () => load().catch(() => {});
+  await load();
+}
+
 // ============ scannen in serie ============
 // Camera blijft open: bekende code in deze container → +1, elders → melding, onbekend → nieuw item (met productgegevens).
 function serialScan(parentId) {
@@ -874,6 +921,7 @@ async function viewMore(token) {
         h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
         h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Boodschappen'),
         h('a', { class: 'btn', href: '#/trash' }, icon('trash'), 'Prullenbak'),
+        h('a', { class: 'btn', href: '#/duplicates' }, icon('link'), 'Dubbelen opruimen'),
         isAdmin && h('button', { class: 'btn', onclick: () => fmsDialog().then((ok) => ok && draw()) }, icon('upload'), 'Find my stuff importeren'))),
       isAdmin && h('div', { class: 'section-title' }, 'Opnieuw beginnen'),
       isAdmin && h('div', { class: 'card' },
