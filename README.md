@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.1.0-alpha.1
+# Mijn Spullen — 0.2.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -20,8 +20,25 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
 
-**Nog niet in 0.1:** import (CSV/FindMyStuff), offline gebruik, herinneringsmeldingen, NFC, meerdere inventarissen/rechten per gebruiker,
-automatische back-up, labels printen. Zie "Roadmap".
+### Nieuw in 0.2
+
+- **NFC-tags** (Chrome op Android, Web NFC): koppel een tag aan een item of container. De app zet de link op de tag, dus
+  tag aantikken opent het juiste item ook als de app dicht is. Alleen-lezen tags werken via de scanknop (serienummer).
+- **QR-labels printen** voor een container en alles eronder (klein/middel/groot, optioneel ook items). Scannen opent de plek.
+- **Betere scanner**: hoge resolutie, continu scherpstellen, lamp en zoom (als de telefoon dat kan), controle op het
+  EAN-controlegetal en twee gelijke lezingen voor streepjescodes (minder misreads), trilt bij succes.
+- **Product opzoeken** bij een EAN: naam, omschrijving en productfoto uit Open Food Facts / Open Products Facts.
+- **Foto's**: aparte knoppen voor camera en galerij.
+- **CSV-import** met proefrun (eigen export, of andere CSV met kolommen naam, locatie "A > B", aantal, …).
+- **Automatische back-ups**: elke nacht een kopie van de database in `/data/backups` (laatste 14), plus downloads
+  (los bestand of volledige `.tar` met foto's) onder *Meer → Back-ups*.
+- **Home Assistant**: webhook-meldingen bij "bijna op" en bij houdbaarheid (dagelijks), en `GET /api/summary` voor sensoren.
+- **API-tokens** (`Authorization: Bearer ms_…`) voor HA, scripts of een latere native app.
+
+Instellingen (omgevingsvariabelen in de stack): `APP_URL`, `HA_WEBHOOK_URL`, `NOTIFY_DAYS` (7), `NOTIFY_HOUR` (8),
+`BACKUP_HOUR` (3), `BACKUP_KEEP` (14).
+
+**Nog niet:** offline gebruik, meerdere inventarissen/rechten per gebruiker, Find my stuff-specifiek importformaat.
 
 ## Draaien in Portainer (patroon: `*.steno.nl`, netwerk `hassio`, NPM)
 

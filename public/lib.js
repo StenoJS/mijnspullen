@@ -43,6 +43,15 @@ const ICONS = {
   logout: 'M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h11',
   download: 'M12 4v11M7 11l5 5 5-5M5 20h14',
   folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+  nfc: 'M6 8.5a5 5 0 0 1 0 7M9 6a8.5 8.5 0 0 1 0 12M12.5 3.5a12 12 0 0 1 0 17M3 11v2',
+  flash: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  print: 'M6 9V3h12v6M6 18H4v-7h16v7h-2M7 14h10v7H7z',
+  upload: 'M12 16V5M7 9l5-5 5 5M5 20h14',
+  key: 'M14 10a4 4 0 1 0-3.5 4L9 15.5V18H6.5v2.5H3V17l6.5-6.5A4 4 0 0 0 14 10zM15.5 8.5h.01',
+  image: 'M4 5h16v14H4zM4 15l4-4 4 4 3-3 5 5M15.5 9h.01',
+  qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM14 18h2M18 14h2',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
+  shield: 'M12 3 4 6v6c0 4.5 3.4 8.2 8 9 4.6-.8 8-4.5 8-9V6z',
 };
 export function icon(name) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

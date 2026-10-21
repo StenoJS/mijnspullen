@@ -38,7 +38,26 @@ function parseCookies(header) {
   return out;
 }
 
+// API-token (Authorization: Bearer ms_…) voor Home Assistant, scripts of een native app.
+function createApiToken(db, userId, name) {
+  const token = 'ms_' + crypto.randomBytes(24).toString('base64url');
+  const r = db.prepare('INSERT INTO api_tokens(user_id,name,token_hash,prefix,created_at) VALUES(?,?,?,?,?)')
+    .run(userId, name, sha(token), token.slice(0, 10), new Date().toISOString());
+  return { id: Number(r.lastInsertRowid), token };
+}
+function getTokenUser(db, header) {
+  const m = /^Bearer\s+(ms_[A-Za-z0-9_-]{20,})$/.exec(String(header || ''));
+  if (!m) return null;
+  const row = db.prepare(`
+    SELECT u.id, u.username, u.display_name, u.role, u.disabled, t.id AS token_id
+    FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?`).get(sha(m[1]));
+  if (!row || row.disabled) return null;
+  db.prepare('UPDATE api_tokens SET last_used_at = ? WHERE id = ?').run(new Date().toISOString(), row.token_id);
+  return { id: row.id, username: row.username, display_name: row.display_name, role: row.role, _viaToken: true };
+}
+
 function getUser(db, req) {
+  if (req.headers.authorization) return getTokenUser(db, req.headers.authorization);
   const token = parseCookies(req.headers.cookie)[COOKIE];
   if (!token) return null;
   const row = db.prepare(`
@@ -74,4 +93,4 @@ function loginFailed(key) {
 }
 const loginOk = (key) => fails.delete(key);
 
-module.exports = { hashPassword, verifyPassword, createSession, getUser, destroySession, cookieHeader, clearCookie, loginAllowed, loginFailed, loginOk, COOKIE };
+module.exports = { createApiToken, hashPassword, verifyPassword, createSession, getUser, destroySession, cookieHeader, clearCookie, loginAllowed, loginFailed, loginOk, COOKIE };

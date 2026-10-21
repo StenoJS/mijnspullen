@@ -1,4 +1,6 @@
 import { CLIENT_ID, h, flat, icon, api, ApiError, setUnauthorizedHandler, money, num, daysUntil, fmtDate, expiryText, debounce, toast, openDialog, confirmDialog, uploadPhoto } from './lib.js';
+import { nfcSupported, readTag, linkTag } from './nfc.js';
+import { qrSvg } from './qr.js';
 
 const app = document.getElementById('app');
 const S = { me: null, tags: [], version: '' };
@@ -117,6 +119,7 @@ async function route() {
     else if (seg[0] === 'search') await viewSearch(q, token);
     else if (seg[0] === 'tags') await viewTags(token);
     else if (seg[0] === 'more') await viewMore(token);
+    else if (seg[0] === 'labels') await viewLabels(Number(seg[1]) || null, q, token);
     else await viewBrowse(null, token);
   } catch (e) {
     if (token !== routeToken || e.status === 401) return;
@@ -171,7 +174,8 @@ async function viewBrowse(id, token) {
     const parentHref = c ? (c.path.length ? `#/c/${c.path[c.path.length - 1].id}` : '#/') : null;
     const main = shell(c ? c.name : 'Mijn Spullen', {
       tab: 'home', back: parentHref,
-      actions: [c && h('a', { class: 'btn icon ghost', href: `#/t/${c.id}`, 'aria-label': 'Bewerken' }, icon('more')), scanBtn(id)],
+      actions: [h('a', { class: 'btn icon ghost', href: `#/labels/${id || 0}`, 'aria-label': 'Labels printen', title: 'Labels printen' }, icon('qr')),
+        c && h('a', { class: 'btn icon ghost', href: `#/t/${c.id}`, 'aria-label': 'Bewerken' }, icon('more')), scanBtn(id)],
     });
     if (!c) {
       const s = stats.stats;
@@ -240,42 +244,115 @@ async function viewSearch(q, token) {
 }
 
 // ============ scannen ============
-function scanDialog() {
+// Controlegetal van EAN-13/EAN-8/UPC-A: voorkomt half gelezen streepjescodes.
+function validEan(code) {
+  if (!/^\d{8}$|^\d{12,13}$/.test(code)) return true;
+  const d = code.split('').map(Number);
+  const check = d.pop();
+  const sum = d.reverse().reduce((a, n, i) => a + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check;
+}
+// Link naar een item/container in deze app (van een eigen QR-label of NFC-tag)?
+function ownRoute(text) {
+  try {
+    const u = new URL(text);
+    if (u.origin !== location.origin) return null;
+    const m = /^#\/(c|t)\/(\d+)$/.exec(u.hash);
+    return m ? `#/${m[1]}/${m[2]}` : null;
+  } catch { return null; }
+}
+function scanDialog({ nfc = false } = {}) {
   return openDialog((close) => {
     const video = h('video', { playsinline: true, muted: true, autoplay: true });
-    const note = h('div', { class: 'meta' }, 'Houd de barcode of QR-code voor de camera…');
+    const wrap = h('div', { class: 'video-wrap' }, video, h('div', { class: 'aim' }));
+    const note = h('div', { class: 'meta' }, 'Houd de barcode of QR-code in het kader…');
+    const tools = h('div', { class: 'scan-tools' });
     const manual = h('input', { placeholder: 'Of typ de code hier', inputmode: 'text', 'aria-label': 'Code' });
-    let stream = null;
-    const finish = (v) => { stream && stream.getTracks().forEach((t) => t.stop()); close(v); };
+    const ctl = new AbortController();
+    let stream = null, done = false;
+    const finish = (v) => {
+      if (done) return; done = true;
+      if (v) navigator.vibrate?.(40);
+      stream && stream.getTracks().forEach((t) => t.stop());
+      ctl.abort(); close(v);
+    };
+    const nfcNote = nfc && nfcSupported() && h('div', { class: 'nfc-hint' }, icon('nfc'), 'Of houd je telefoon bij een NFC-tag');
+    if (nfcNote) readTag(ctl.signal).then((r) => finish({ nfc: r.serial, url: r.url })).catch(() => { if (!done) nfcNote.remove(); });
     (async () => {
-      if (!('BarcodeDetector' in window) || !navigator.mediaDevices) { note.textContent = 'Camera-scan wordt door deze browser niet ondersteund. Typ de code hieronder.'; video.parentElement && (video.parentElement.style.display = 'none'); return; }
+      if (!('BarcodeDetector' in window) || !navigator.mediaDevices) {
+        note.textContent = 'Camera-scan wordt door deze browser niet ondersteund (bijv. Safari). Typ de code hieronder.'; wrap.style.display = 'none'; return;
+      }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } } });
+        if (done) { stream.getTracks().forEach((t) => t.stop()); return; }
         video.srcObject = stream; await video.play();
-        const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf', 'qr_code'] });
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+        if (caps.torch) {
+          let on = false;
+          tools.append(h('button', { class: 'btn sm', type: 'button', onclick: async (e) => {
+            on = !on; const b = e.currentTarget;
+            try { await track.applyConstraints({ advanced: [{ torch: on }] }); b.classList.toggle('primary', on); } catch { /* */ }
+          } }, icon('flash'), 'Lamp'));
+        }
+        if (caps.zoom && caps.zoom.max > caps.zoom.min) {
+          tools.append(h('label', { class: 'zoom' }, 'Zoom', h('input', { type: 'range', min: caps.zoom.min, max: Math.min(caps.zoom.max, caps.zoom.min * 4 || 4), step: caps.zoom.step || 0.1, value: caps.zoom.min,
+            oninput: (e) => track.applyConstraints({ advanced: [{ zoom: Number(e.target.value) }] }).catch(() => {}) })));
+        }
+        const formats = await BarcodeDetector.getSupportedFormats().catch(() => []);
+        const want = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'codabar', 'qr_code', 'data_matrix', 'aztec', 'pdf417'];
+        const det = new BarcodeDetector({ formats: formats.length ? want.filter((f) => formats.includes(f)) : want });
+        let last = '', hits = 0;
         const tick = async () => {
-          if (!video.isConnected) { stream.getTracks().forEach((t) => t.stop()); return; }
-          try { const codes = await det.detect(video); if (codes.length) return finish(codes[0].rawValue); } catch { /* volgende frame */ }
-          setTimeout(tick, 200);
+          if (done || !video.isConnected) { stream.getTracks().forEach((t) => t.stop()); return; }
+          try {
+            const codes = await det.detect(video);
+            const c = codes.find((x) => x.rawValue && (x.format === 'qr_code' || validEan(x.rawValue)));
+            if (c) {
+              // 2D-codes zijn betrouwbaar; voor streepjescodes twee keer dezelfde lezing eisen.
+              hits = c.rawValue === last ? hits + 1 : 1; last = c.rawValue;
+              if (hits >= (['qr_code', 'data_matrix', 'aztec', 'pdf417'].includes(c.format) ? 1 : 2)) return finish(c.rawValue);
+            }
+          } catch { /* volgende frame */ }
+          if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => tick()); else setTimeout(tick, 120);
         };
         tick();
-      } catch { note.textContent = 'Geen cameratoegang (HTTPS en toestemming nodig). Typ de code hieronder.'; }
+      } catch { note.textContent = 'Geen cameratoegang (HTTPS en toestemming nodig). Typ de code hieronder.'; wrap.style.display = 'none'; }
     })();
     return h('form', { class: 'dlg', onsubmit: (e) => { e.preventDefault(); if (manual.value.trim()) finish(manual.value.trim()); } },
-      h('h2', {}, 'Barcode scannen'), h('div', { class: 'video-wrap' }, video), note,
+      h('h2', {}, 'Scannen'), wrap, tools, note, nfcNote,
       h('div', { class: 'inline' }, manual, h('button', { class: 'btn primary', type: 'submit' }, 'OK')),
       h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => finish(undefined) }, 'Sluiten')));
   });
 }
 async function scanAndGo(parentId) {
-  const code = await scanDialog();
-  if (!code) return;
+  const res = await scanDialog({ nfc: true });
+  if (!res) return;
+  const inParent = parentId ? `&parent=${parentId}` : '';
   try {
-    const r = await api('GET', `/api/things?barcode=${encodeURIComponent(code)}`);
+    if (typeof res === 'object') {
+      const own = res.url && ownRoute(res.url);
+      if (own) { location.hash = own; return; }
+      if (!res.nfc) { toast('Deze NFC-tag heeft geen serienummer en geen link van Mijn Spullen', true); return; }
+      const r = await api('GET', `/api/things?nfc=${encodeURIComponent(res.nfc)}`);
+      if (r.things.length) { location.hash = r.things[0].is_container ? `#/c/${r.things[0].id}` : `#/t/${r.things[0].id}`; return; }
+      const choice = await openDialog((close) => h('div', { class: 'dlg' }, h('h2', {}, 'Nieuwe NFC-tag'),
+        h('p', { style: 'margin:0;color:var(--muted)' }, 'Deze tag is nog nergens aan gekoppeld. Wat wil je ermee?'),
+        h('div', { class: 'dlg-actions' },
+          h('button', { class: 'btn', onclick: () => close() }, 'Niets'),
+          h('button', { class: 'btn', onclick: () => close('0') }, 'Nieuw item'),
+          h('button', { class: 'btn primary', onclick: () => close('1') }, 'Nieuwe container'))));
+      if (choice) location.hash = `#/new?container=${choice}&nfc=${encodeURIComponent(res.nfc)}${inParent}`;
+      return;
+    }
+    const own = ownRoute(res);
+    if (own) { location.hash = own; return; }
+    const r = await api('GET', `/api/things?barcode=${encodeURIComponent(res)}`);
     if (r.things.length === 1) { location.hash = r.things[0].is_container ? `#/c/${r.things[0].id}` : `#/t/${r.things[0].id}`; return; }
-    if (r.things.length > 1) { location.hash = `#/search?q=${encodeURIComponent(code)}`; return; }
-    const ok = await confirmDialog('Niet gevonden', `Er is nog niets met code "${code}". Nieuw item aanmaken?`, 'Nieuw item', false);
-    if (ok) location.hash = `#/new?container=0&barcode=${encodeURIComponent(code)}${parentId ? `&parent=${parentId}` : ''}`;
+    if (r.things.length > 1) { location.hash = `#/search?q=${encodeURIComponent(res)}`; return; }
+    const ok = await confirmDialog('Niet gevonden', `Er is nog niets met code "${res}". Nieuw item aanmaken?`, 'Nieuw item', false);
+    if (ok) location.hash = `#/new?container=0&barcode=${encodeURIComponent(res)}${inParent}`;
   } catch (e) { toast(e.message, true); }
 }
 
@@ -305,10 +382,11 @@ async function viewThing(id, q, token) {
   if (stale(token)) return;
   const isNew = !t;
   const f = isNew
-    ? { is_container: q.container === '1', name: '', description: '', notes: '', quantity: 1, min_quantity: '', barcode: q.barcode || '', price: '', expires_on: '', favourite: false, parent_id: q.parent ? Number(q.parent) : null, tag_ids: [], path: [] }
+    ? { is_container: q.container === '1', name: '', description: '', notes: '', quantity: 1, min_quantity: '', barcode: q.barcode || '', nfc_id: q.nfc || null, price: '', expires_on: '', favourite: false, parent_id: q.parent ? Number(q.parent) : null, tag_ids: [], path: [] }
     : { ...t, min_quantity: t.min_quantity ?? '', barcode: t.barcode || '', price: t.price ?? '', expires_on: t.expires_on || '' };
   if (isNew && f.parent_id) { const p = (await api('GET', `/api/things/${f.parent_id}`).catch(() => null)); if (p) f.path = [...p.thing.path, { id: p.thing.id, name: p.thing.name }]; else f.parent_id = null; }
   const pending = []; // foto's voor een nog niet opgeslagen item
+  let pendingImageUrl = null; // productfoto uit Open Food Facts, wordt na opslaan overgenomen
   let images = isNew ? [] : t.images.slice();
   let dirty = false;
 
@@ -334,6 +412,25 @@ async function viewThing(id, q, token) {
 
   const scanInto = h('button', { class: 'btn icon', type: 'button', 'aria-label': 'Scan', onclick: async () => { const c = await scanDialog(); if (c) { f.barcode = c; barcodeI.value = c; dirty = true; } } }, icon('scan'));
   const barcodeI = inp('barcode', { maxlength: 100, inputmode: 'text', placeholder: 'EAN / QR / eigen code' });
+  const lookupBtn = h('button', { class: 'btn icon', type: 'button', 'aria-label': 'Product opzoeken', title: 'Product opzoeken', onclick: () => lookup(true) }, icon('search'));
+  const lookup = async (loud) => {
+    const code = String(f.barcode || '').trim();
+    if (!/^\d{6,14}$/.test(code)) { if (loud) toast('Opzoeken werkt met een EAN/UPC-streepjescode', true); return; }
+    lookupBtn.disabled = true;
+    try {
+      const { product: p } = await api('GET', `/api/lookup/${code}`);
+      if (!p) { if (loud) toast('Niet gevonden in Open Food Facts'); return; }
+      if (!f.name || loud) { f.name = p.name; nameI.value = p.name; }
+      if (p.description && !f.description) { f.description = p.description; descI.value = p.description; }
+      dirty = true;
+      if (p.image_url && !images.length && !pending.length) {
+        if (isNew) pendingImageUrl = p.image_url;
+        else { try { images.push((await api('POST', `/api/things/${id}/images/import`, { url: p.image_url })).image); drawPhotos(); } catch { /* geen foto, geen probleem */ } }
+      }
+      toast(`Gevonden: ${p.name}${p.image_url && (isNew ? pendingImageUrl : true) ? ' (met productfoto)' : ''}`);
+      drawPhotos();
+    } catch (ex) { if (loud) toast(ex.message, true); } finally { lookupBtn.disabled = false; }
+  };
 
   const qtyF = h('div', { class: 'field' }, h('label', {}, 'Aantal'), inp('quantity', { type: 'number', min: '0', step: 'any', inputmode: 'decimal' }));
   const minF = h('div', { class: 'field' }, h('label', {}, 'Melden bij ≤'), inp('min_quantity', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', placeholder: 'optioneel' }));
@@ -350,7 +447,9 @@ async function viewThing(id, q, token) {
 
   // foto's
   const photoBox = h('div', { class: 'photos' });
-  const fileI = h('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none', onchange: async (e) => {
+  const camI = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none', onchange: (e) => fileI.onchange(e) });
+  const fileI = h('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none' });
+  fileI.onchange = async (e) => {
     for (const file of e.target.files) {
       try {
         if (isNew) pending.push(file);
@@ -358,15 +457,28 @@ async function viewThing(id, q, token) {
       } catch (ex) { toast(ex.message, true); }
     }
     e.target.value = ''; drawPhotos();
-  } });
+  };
   const drawPhotos = () => photoBox.replaceChildren(...flat(
     images.map((im) => h('div', { class: 'photo', onclick: () => window.open(`/api/images/${im.id}`, '_blank') },
       h('img', { src: `/api/images/${im.id}?thumb=1`, alt: '' }),
       h('button', { type: 'button', 'aria-label': 'Foto verwijderen', onclick: async (e) => { e.stopPropagation(); if (!await confirmDialog('Foto verwijderen?', 'Deze foto wordt definitief verwijderd.')) return; try { await api('DELETE', `/api/images/${im.id}`); images = images.filter((x) => x.id !== im.id); drawPhotos(); } catch (ex) { toast(ex.message, true); } } }, icon('x')))),
     pending.map((file, i) => h('div', { class: 'photo' }, h('img', { src: URL.createObjectURL(file), alt: '' }), h('button', { type: 'button', 'aria-label': 'Verwijderen', onclick: () => { pending.splice(i, 1); drawPhotos(); } }, icon('x')))),
-    h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto toevoegen', onclick: () => fileI.click() }, icon('camera'))));
+    pendingImageUrl && h('div', { class: 'photo pending-url' }, icon('image'), h('small', {}, 'productfoto'), h('button', { type: 'button', 'aria-label': 'Niet gebruiken', onclick: () => { pendingImageUrl = null; drawPhotos(); } }, icon('x'))),
+    h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto maken', title: 'Foto maken', onclick: () => camI.click() }, icon('camera')),
+    h('button', { type: 'button', class: 'addphoto', 'aria-label': 'Foto uit galerij', title: 'Uit galerij', onclick: () => fileI.click() }, icon('image'))));
   drawPhotos();
 
+  const descI = h('input', { value: f.description, maxlength: 2000, oninput: (e) => { f.description = e.target.value; dirty = true; } });
+  const nfcField = h('div', { class: 'field' });
+  const drawNfc = () => nfcField.replaceChildren(...flat(
+    h('span', { class: 'label' }, 'NFC-tag'),
+    h('div', { class: 'inline' },
+      h('span', { class: 'nfc-state' + (f.nfc_id ? ' on' : '') }, icon('nfc'), f.nfc_id ? `Gekoppeld (${f.nfc_id})` : 'Geen tag gekoppeld'),
+      !isNew && nfcSupported() && h('button', { class: 'btn sm', type: 'button', onclick: () => nfcLinkDialog(t).then((serial) => { if (serial !== undefined) { f.nfc_id = serial; t.version++; drawNfc(); } }) }, f.nfc_id ? 'Opnieuw' : 'Koppelen'),
+      f.nfc_id && h('button', { class: 'btn sm danger', type: 'button', onclick: () => { f.nfc_id = null; dirty = true; drawNfc(); } }, 'Loskoppelen')),
+    isNew && !f.nfc_id && nfcSupported() && h('div', { class: 'meta' }, 'Na opslaan kun je hier een tag koppelen.'),
+    !nfcSupported() && !f.nfc_id && h('div', { class: 'meta' }, 'NFC werkt in Chrome op Android. Je kunt ook een QR-label printen.')));
+  drawNfc();
   const favBtn = h('button', { type: 'button', class: 'btn sm', onclick: (e) => { f.favourite = !f.favourite; dirty = true; e.currentTarget.classList.toggle('primary', f.favourite); } }, icon('star'), 'Favoriet');
   if (f.favourite) favBtn.classList.add('primary');
 
@@ -374,7 +486,7 @@ async function viewThing(id, q, token) {
     ev.preventDefault(); err.textContent = '';
     const body = {
       name: f.name, is_container: f.is_container, description: f.description, notes: f.notes, barcode: f.barcode,
-      expires_on: f.expires_on, favourite: f.favourite, parent_id: f.parent_id, tag_ids: f.tag_ids,
+      expires_on: f.expires_on, favourite: f.favourite, parent_id: f.parent_id, tag_ids: f.tag_ids, nfc_id: f.nfc_id || null,
       quantity: f.is_container ? (f.quantity === '' ? 1 : f.quantity) : f.quantity, min_quantity: f.is_container ? '' : f.min_quantity, price: f.is_container ? '' : f.price,
     };
     saveBtn.disabled = true;
@@ -382,6 +494,7 @@ async function viewThing(id, q, token) {
       if (isNew) {
         const r = await api('POST', '/api/things', body);
         for (const file of pending) { try { await uploadPhoto(r.thing.id, file); } catch (ex) { toast(ex.message, true); } }
+        if (pendingImageUrl && !pending.length) await api('POST', `/api/things/${r.thing.id}/images/import`, { url: pendingImageUrl }).catch(() => {});
         toast('Opgeslagen');
         location.hash = f.is_container ? `#/c/${r.thing.id}` : (f.parent_id ? `#/c/${f.parent_id}` : '#/');
       } else {
@@ -413,11 +526,12 @@ async function viewThing(id, q, token) {
     h('div', { class: 'field' }, h('label', {}, 'Naam'), nameI),
     h('div', { class: 'field' }, h('span', { class: 'label' }, 'Locatie'), locBtn),
     h('div', { class: 'grid2' }, qtyF, minF),
-    h('div', { class: 'field' }, h('label', {}, "Foto's"), photoBox, fileI),
+    h('div', { class: 'field' }, h('label', {}, "Foto's"), photoBox, fileI, camI),
     h('div', { class: 'field' }, h('label', {}, 'Tags'), tagBox),
     h('div', { class: 'grid2' }, priceF, h('div', { class: 'field' }, h('label', {}, 'Houdbaar tot'), inp('expires_on', { type: 'date' }))),
-    h('div', { class: 'field' }, h('label', {}, 'Barcode / QR'), h('div', { class: 'inline' }, barcodeI, scanInto)),
-    h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), h('input', { value: f.description, maxlength: 2000, oninput: (e) => { f.description = e.target.value; dirty = true; } })),
+    h('div', { class: 'field' }, h('label', {}, 'Barcode / QR'), h('div', { class: 'inline' }, barcodeI, lookupBtn, scanInto)),
+    h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), descI),
+    nfcField,
     h('div', { class: 'field' }, h('label', {}, 'Notities'), h('textarea', { oninput: (e) => { f.notes = e.target.value; dirty = true; } }, f.notes)),
     h('div', { class: 'actions' }, favBtn),
     !isNew && h('div', { class: 'meta' }, `Aangemaakt door ${t.created_by_name || 'onbekend'} op ${fmtDate(t.created_at)}`, h('br'), `Laatst gewijzigd door ${t.updated_by_name || 'onbekend'} op ${fmtDate(t.updated_at)}`, t.expires_on ? h('br') : null, t.expires_on ? expiryText(t.expires_on) : null),
@@ -428,8 +542,13 @@ async function viewThing(id, q, token) {
         if (!await confirmDialog(`"${t.name}" verwijderen?`, kids ? `Dit verwijdert ook alles wat erin zit (${kids} direct onderdeel${kids === 1 ? '' : 'en'} en dieper). Dit kan niet ongedaan worden gemaakt.` : 'Dit kan niet ongedaan worden gemaakt.')) return;
         try { await api('DELETE', `/api/things/${id}`); toast('Verwijderd'); location.hash = back; } catch (ex) { toast(ex.message, true); }
       } }, icon('trash'), 'Verwijderen')));
-  main.append(bannerBox, form);
+  const labelCard = !isNew && h('div', { class: 'card label-card' },
+    h('div', { class: 'qr-mini' }, qrSvg(thingUrl(t))),
+    h('div', { class: 'main' }, h('b', {}, 'Label & NFC'), h('div', { class: 'sub' }, 'Scan deze QR-code of tik de NFC-tag aan om hier direct te komen.'),
+      h('div', { class: 'actions' }, h('a', { class: 'btn sm', href: `#/labels/${t.id}?only=1` }, icon('print'), 'Label printen'))));
+  main.append(bannerBox, form, labelCard);
   if (isNew) nameI.focus();
+  if (isNew && f.barcode && !f.name) lookup(false);
 
   // live: iemand anders wijzigde dit item
   if (!isNew) refresh = async () => {
@@ -440,6 +559,67 @@ async function viewThing(id, q, token) {
       bannerBox.replaceChildren(h('div', { class: 'banner' }, `${cur.updated_by_name || 'Iemand'} heeft dit item gewijzigd.`, h('button', { class: 'btn sm', onclick: () => route() }, 'Verversen')));
     } catch (ex) { if (ex.status === 404) { toast('Dit item is verwijderd', true); location.hash = back; } }
   };
+}
+
+// ============ NFC & labels ============
+const thingUrl = (t) => `${location.origin}/#/${t.is_container ? 'c' : 't'}/${t.id}`;
+
+// Tag koppelen: serienummer opslaan én de link op de tag zetten (werkt dan ook zonder dat de app open is).
+function nfcLinkDialog(t) {
+  return openDialog((close) => {
+    const ctl = new AbortController();
+    const note = h('p', { class: 'nfc-wait' }, icon('nfc'), 'Houd een NFC-tag tegen de achterkant van je telefoon…');
+    const stop = (v) => { ctl.abort(); close(v); };
+    linkTag(thingUrl(t), ctl.signal).then(async ({ serial, wrote, writeError }) => {
+      if (!serial && !wrote) { note.textContent = `Kon niet op deze tag schrijven (${writeError ? writeError.message : 'onbekend'}).`; return; }
+      try {
+        if (serial) await api('PATCH', `/api/things/${t.id}`, { nfc_id: serial });
+        toast(wrote ? 'NFC-tag gekoppeld en beschreven' : 'NFC-tag gekoppeld (alleen-lezen tag: werkt via de scanknop in de app)');
+        stop(serial || null);
+      } catch (ex) { note.textContent = ex.message; }
+    }).catch((e) => {
+      if (e.name === 'AbortError') return;
+      note.textContent = e.name === 'NotAllowedError' ? 'Geen toestemming voor NFC. Sta NFC toe voor deze site in Chrome.' : `NFC-fout: ${e.message}`;
+    });
+    return h('div', { class: 'dlg' }, h('h2', {}, 'NFC-tag koppelen'), note,
+      h('div', { class: 'meta' }, `Op de tag komt de link naar "${t.name}". Een tag die al bij iets anders hoorde, wordt daar losgekoppeld.`),
+      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => stop(undefined) }, 'Annuleren')));
+  });
+}
+
+async function viewLabels(id, q, token) {
+  const opts = { items: q.items === '1', size: q.size || 'm', only: q.only === '1' };
+  const load = async () => {
+    let list;
+    if (opts.only && id) list = [(await api('GET', `/api/things/${id}`)).thing];
+    else {
+      const { nodes } = await api('GET', '/api/tree');
+      const kids = new Map();
+      nodes.forEach((n) => { const k = n.parent_id || 0; (kids.get(k) || kids.set(k, []).get(k)).push(n); });
+      const byId = new Map(nodes.map((n) => [n.id, n]));
+      list = [];
+      const walk = (pid) => (kids.get(pid) || []).forEach((n) => { if (n.is_container || opts.items) list.push(n); walk(n.id); });
+      if (id && byId.get(id)) list.push(byId.get(id));
+      walk(id || 0);
+      const names = new Map(nodes.map((n) => [n.id, n]));
+      for (const n of list) { const p = []; let c = names.get(n.parent_id); while (c && p.length < 20) { p.unshift(c.name); c = names.get(c.parent_id); } n.where = p.join(' › '); }
+    }
+    if (stale(token)) return;
+    const main = shell('Labels', { back: id ? `#/c/${id}` : '#/', tab: 'home', actions: h('button', { class: 'btn icon ghost', 'aria-label': 'Printen', onclick: () => window.print() }, icon('print')) });
+    const setQ = (k, v) => { const p = new URLSearchParams({ ...(opts.items ? { items: '1' } : {}), size: opts.size, ...(opts.only ? { only: '1' } : {}) }); p.set(k, v); if (!v) p.delete(k); location.hash = `#/labels/${id || 0}?${p}`; };
+    main.append(
+      h('div', { class: 'card noprint' },
+        h('p', { style: 'margin:0 0 10px' }, `${list.length} label${list.length === 1 ? '' : 's'}. Print op stickervel of gewoon papier en knip uit. Scannen opent meteen de juiste plek.`),
+        h('div', { class: 'chips', style: 'margin:0' },
+          [['s', 'Klein'], ['m', 'Middel'], ['l', 'Groot']].map(([k, l]) => h('button', { class: 'chip' + (opts.size === k ? ' on' : ''), onclick: () => setQ('size', k) }, l)),
+          !opts.only && h('button', { class: 'chip' + (opts.items ? ' on' : ''), onclick: () => setQ('items', opts.items ? '' : '1') }, 'Ook items'),
+          h('button', { class: 'chip on', onclick: () => window.print() }, icon('print'), 'Printen'))),
+      list.length ? h('div', { class: `labels size-${opts.size}` }, list.map((n) => h('div', { class: 'lbl' }, qrSvg(thingUrl(n), { ecc: 'Q' }),
+        h('div', { class: 'lbl-txt' }, h('b', {}, n.name), n.where && h('small', {}, n.where), h('small', { class: 'lbl-id' }, `#${n.id}`)))))
+        : h('div', { class: 'empty' }, 'Geen containers om een label voor te maken.'));
+  };
+  refresh = null;
+  await load();
 }
 
 // ============ tags ============
@@ -486,7 +666,9 @@ async function viewTags(token) {
 // ============ meer ============
 async function viewMore(token) {
   const draw = async () => {
-    const [users, act] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/activity?limit=25')]);
+    const isAdminQ = S.me.role === 'admin';
+    const [users, act, tokens, integ, backups] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/activity?limit=25'), api('GET', '/api/tokens'), api('GET', '/api/integrations'),
+      isAdminQ ? api('GET', '/api/backups') : null]);
     if (stale(token)) return;
     const main = shell('Meer', { tab: 'more' });
     const isAdmin = S.me.role === 'admin';
@@ -501,13 +683,82 @@ async function viewMore(token) {
         isAdmin && u.id !== S.me.id && h('button', { class: 'btn sm', onclick: () => userDialog(u).then((ok) => ok && draw()) }, 'Beheer'))),
       isAdmin && h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => userDialog().then((ok) => ok && draw()) }, icon('plus'), 'Gebruiker toevoegen'))),
       h('div', { class: 'section-title' }, 'Gegevens'),
-      h('div', { class: 'card' }, h('a', { class: 'btn', href: '/api/export.csv', download: true }, icon('download'), 'Exporteer alles als CSV')),
+      h('div', { class: 'card' }, h('div', { class: 'actions' },
+        h('a', { class: 'btn', href: '/api/export.csv', download: true }, icon('download'), 'Exporteer als CSV'),
+        h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
+        h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'))),
+      isAdmin && h('div', { class: 'section-title' }, "Back-ups"),
+      isAdmin && h('div', { class: 'card' },
+        h('p', { class: 'meta', style: 'margin:0 0 8px' }, `Elke nacht om ${backups.config.backupHour}:00 een kopie van de database; de laatste ${backups.config.backupKeep} blijven bewaard (in het volume onder /data/backups). De volledige download bevat ook alle foto's.`),
+        backups.backups.slice(0, 5).map((b) => h('div', { class: 'act' }, h('a', { href: `/api/backups/${encodeURIComponent(b.name)}`, download: true }, b.name), h('small', {}, `${(b.size / 1024).toFixed(0)} kB · ${fmtDate(b.created_at)}`))),
+        !backups.backups.length && h('div', { class: 'meta' }, 'Nog geen back-ups.'),
+        h('div', { class: 'actions', style: 'margin-top:10px' },
+          h('button', { class: 'btn', onclick: async () => { try { await api('POST', '/api/backups'); toast('Back-up gemaakt'); draw(); } catch (ex) { toast(ex.message, true); } } }, icon('shield'), 'Nu back-up maken'),
+          h('a', { class: 'btn', href: '/api/backup.tar', download: true }, icon('download'), "Volledige back-up (.tar)"))),
+      h('div', { class: 'section-title' }, 'Koppelingen'),
+      h('div', { class: 'card' },
+        h('div', { class: 'userrow' }, h('div', { class: 'thumb' }, icon('home')), h('div', { class: 'main' }, h('b', {}, 'Home Assistant'),
+          h('div', { class: 'sub' }, integ.haConfigured ? `Meldingen aan: bijna op, en houdbaarheid ≤ ${integ.notifyDays} dagen (dagelijks om ${integ.notifyHour}:00)` : 'Niet ingesteld (HA_WEBHOOK_URL in de stack)')),
+          isAdmin && integ.haConfigured && h('button', { class: 'btn sm', onclick: async () => { try { await api('POST', '/api/integrations/ha/test'); toast('Testmelding verstuurd'); } catch (ex) { toast(ex.message, true); } } }, 'Test')),
+        h('div', { class: 'section-sub' }, 'API-tokens'),
+        h('p', { class: 'meta', style: 'margin:0 0 6px' }, 'Voor Home Assistant, scripts of een app: stuur "Authorization: Bearer <token>" mee. Een token heeft jouw rechten.'),
+        tokens.tokens.map((tk) => h('div', { class: 'userrow' }, h('div', { class: 'main' }, h('b', {}, tk.name), h('div', { class: 'sub' }, `${tk.prefix}… · ${tk.last_used_at ? 'laatst gebruikt ' + fmtDate(tk.last_used_at) : 'nog niet gebruikt'}`)),
+          h('button', { class: 'btn sm danger', onclick: async () => { if (!await confirmDialog(`Token "${tk.name}" intrekken?`, 'Wat dit token gebruikt, werkt daarna niet meer.', 'Intrekken')) return; await api('DELETE', `/api/tokens/${tk.id}`); draw(); } }, 'Intrekken'))),
+        h('div', { class: 'actions', style: 'margin-top:8px' }, h('button', { class: 'btn', onclick: () => tokenDialog().then((ok) => ok && draw()) }, icon('key'), 'Nieuw token'))),
       h('div', { class: 'section-title' }, 'Recente activiteit'),
       h('div', { class: 'card' }, act.activity.length ? act.activity.map((a) => h('div', { class: 'act' }, a.summary, h('small', {}, fmtDate(a.at)))) : 'Nog geen activiteit.'),
-      h('div', { class: 'ver' }, `Mijn Spullen ${S.version} (alpha)`));
+      h('div', { class: 'ver' }, `Mijn Spullen ${S.version}`));
   };
   refresh = () => draw().catch(() => {});
   await draw();
+}
+function tokenDialog() {
+  return openDialog((close) => {
+    const name = h('input', { required: true, maxlength: 60, placeholder: 'bijv. Home Assistant' });
+    const err = h('div', { class: 'error' });
+    const box = h('div');
+    const form = h('form', { class: 'dlg', onsubmit: async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api('POST', '/api/tokens', { name: name.value });
+        const out = h('input', { value: r.token, readonly: true, onfocus: (ev) => ev.target.select() });
+        box.replaceChildren(h('p', { class: 'meta' }, 'Kopieer het token nu: het wordt hierna nooit meer getoond.'),
+          h('div', { class: 'inline' }, out, h('button', { class: 'btn', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(r.token); toast('Gekopieerd'); } catch { out.select(); } } }, 'Kopieer')),
+          h('div', { class: 'dlg-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => close(true) }, 'Klaar')));
+        form.querySelectorAll('.pre').forEach((el) => el.remove());
+      } catch (ex) { err.textContent = ex.message; }
+    } },
+    h('h2', {}, 'Nieuw API-token'), h('div', { class: 'field pre' }, h('label', {}, 'Waarvoor?'), name), h('div', { class: 'pre' }, err), box,
+    h('div', { class: 'dlg-actions pre' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary', type: 'submit' }, 'Aanmaken')));
+    return form;
+  });
+}
+function importDialog() {
+  return openDialog((close) => {
+    const file = h('input', { type: 'file', accept: '.csv,text/csv,text/plain' });
+    const dups = h('input', { type: 'checkbox', checked: true });
+    const out = h('div');
+    const err = h('div', { class: 'error' });
+    let text = null;
+    const go = async (dry) => {
+      err.textContent = '';
+      if (!text) { if (!file.files[0]) { err.textContent = 'Kies eerst een bestand'; return; } text = await file.files[0].text(); }
+      try {
+        const r = await api('POST', `/api/import.csv?dry=${dry ? 1 : 0}&skip_duplicates=${dups.checked ? 1 : 0}`, new Blob([text], { type: 'text/csv' }), { 'Content-Type': 'text/csv' });
+        const sum = `${r.created_items} items en ${r.created_containers} containers${r.created_tags ? `, ${r.created_tags} nieuwe tags` : ''}${r.skipped ? `; ${r.skipped} overgeslagen (bestaan al)` : ''}.`;
+        if (dry) {
+          out.replaceChildren(h('p', { class: 'meta' }, `${r.rows} regels gelezen (kolommen: ${r.columns.join(', ')}). Dit wordt aangemaakt: ${sum}`),
+            r.errors.length ? h('div', { class: 'error' }, r.errors.slice(0, 5).join(' · ')) : null,
+            h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary', type: 'button', onclick: () => go(false) }, 'Importeren')));
+        } else { toast(`Geïmporteerd: ${sum}`); close(true); }
+      } catch (ex) { err.textContent = ex.message; }
+    };
+    file.addEventListener('change', () => { text = null; out.replaceChildren(); });
+    return h('div', { class: 'dlg' }, h('h2', {}, 'CSV importeren'),
+      h('p', { class: 'meta', style: 'margin:0' }, 'Kolommen die herkend worden: naam, locatie (bijv. "Huis > Zolder > Doos"), type, aantal, minimum, barcode, prijs, houdbaar_tot, tags (gescheiden door |), omschrijving, notities. Een export uit deze app kan er zo weer in.'),
+      file, h('label', { class: 'check' }, dups, 'Items die al op dezelfde plek staan overslaan'), err, out,
+      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Sluiten'), h('button', { class: 'btn primary', type: 'button', onclick: () => go(true) }, 'Controleren')));
+  });
 }
 function pwDialog() {
   return openDialog((close) => {

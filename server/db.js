@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'images'), { recursive: true });
@@ -91,6 +91,30 @@ function migrate(db) {
         at TEXT NOT NULL
       );
       CREATE INDEX idx_activity_at ON activity(at);
+    `);
+  }
+  if (current < 2) {
+    db.exec(`
+      -- NFC: serienummer van een gekoppelde tag (een tag kan ook alleen een URL bevatten).
+      ALTER TABLE things ADD COLUMN nfc_id TEXT;
+      CREATE INDEX idx_things_nfc ON things(nfc_id);
+      -- API-tokens voor Home Assistant, scripts en een eventuele native app.
+      CREATE TABLE api_tokens (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        prefix TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT
+      );
+      -- Meldingen die al verstuurd zijn (zodat Home Assistant niet elke dag hetzelfde krijgt).
+      CREATE TABLE notified (
+        thing_id INTEGER NOT NULL REFERENCES things(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (thing_id, kind)
+      );
     `);
   }
   db.prepare("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")

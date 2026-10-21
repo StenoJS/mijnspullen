@@ -2,13 +2,19 @@
 services:
   mijn-spullen:
     build: .
-    image: mijn-spullen:0.1.0-alpha.1
+    image: mijn-spullen:local
     container_name: mijn-spullen
     restart: unless-stopped
     environment:
       TZ: Europe/Amsterdam
       TRUST_PROXY: "1"     # achter Nginx Proxy Manager: echte client-IP uit X-Forwarded-For
       COOKIE_SECURE: "1"   # alleen via HTTPS; zet op "0" voor een test op http://IP:3000
+      APP_URL: ${APP_URL:-https://spullen.steno.nl}          # voor links in meldingen
+      HA_WEBHOOK_URL: ${HA_WEBHOOK_URL:-}                    # bijv. http://homeassistant:8123/api/webhook/<id>
+      NOTIFY_DAYS: ${NOTIFY_DAYS:-7}                         # houdbaarheid: zoveel dagen vooruit melden
+      NOTIFY_HOUR: ${NOTIFY_HOUR:-8}
+      BACKUP_HOUR: ${BACKUP_HOUR:-3}
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
     volumes:
       - mijn-spullen-data:/data
     networks:

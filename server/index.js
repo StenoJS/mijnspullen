@@ -4,6 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { openDb, tx } = require('./db');
 const auth = require('./auth');
+const { parseCsv, rowsToRecords } = require('./csv');
+const { lookupBarcode, fetchImage } = require('./lookup');
+const { writeTar } = require('./tar');
+const { createJobs } = require('./jobs');
 
 const VERSION = require('../package.json').version;
 const PORT = Number(process.env.PORT || 3000);
@@ -18,6 +22,7 @@ const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'we
 
 const db = openDb(DATA_DIR);
 const IMG_DIR = path.join(DATA_DIR, 'images');
+const jobs = createJobs(db, DATA_DIR);
 
 // ---------- helpers ----------
 class HttpError extends Error {
@@ -164,6 +169,7 @@ function listThings(q) {
     }
   }
   if (q.barcode) { where.push('t.barcode = ?'); args.push(String(q.barcode)); }
+  if (q.nfc) { where.push('t.nfc_id = ?'); args.push(String(q.nfc).toLowerCase()); }
   if (q.tag) {
     const ids = tagDescendants(Number(q.tag));
     where.push(`EXISTS (SELECT 1 FROM thing_tags tt WHERE tt.thing_id = t.id AND tt.tag_id IN (${ids.map(() => '?').join(',')}))`);
@@ -217,6 +223,7 @@ function validateThingInput(b, partial) {
   if ('quantity' in b) { out.quantity = numOrNull(b.quantity); if (out.quantity == null || out.quantity < 0) throw bad('Aantal moet 0 of hoger zijn'); }
   if ('min_quantity' in b) out.min_quantity = numOrNull(b.min_quantity);
   if ('barcode' in b) out.barcode = str(b.barcode, 100) || null;
+  if ('nfc_id' in b) out.nfc_id = str(b.nfc_id, 100).toLowerCase() || null;
   if ('price' in b) out.price = numOrNull(b.price);
   if ('expires_on' in b) out.expires_on = dateOrNull(b.expires_on);
   if ('favourite' in b) out.favourite = bool(b.favourite);
@@ -237,16 +244,20 @@ function setTags(thingId, tagIds) {
   for (const t of tagIds) if (db.prepare('SELECT 1 FROM tags WHERE id = ?').get(t)) ins.run(thingId, t);
 }
 
+// Een NFC-tag hoort bij precies één ding: bij opnieuw koppelen verdwijnt de oude koppeling.
+function releaseNfc(nfcId, keepId) { db.prepare('UPDATE things SET nfc_id = NULL WHERE nfc_id = ? AND id != ?').run(nfcId, keepId); }
+
 function createThing(user, b) {
   const v = validateThingInput(b, false);
   return tx(db, () => {
     const t = now();
-    const r = db.prepare(`INSERT INTO things(parent_id,is_container,name,description,notes,quantity,min_quantity,barcode,price,expires_on,favourite,created_by,updated_by,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const r = db.prepare(`INSERT INTO things(parent_id,is_container,name,description,notes,quantity,min_quantity,barcode,nfc_id,price,expires_on,favourite,created_by,updated_by,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       v.parent_id ?? null, v.is_container ?? 0, v.name, v.description ?? '', v.notes ?? '', v.quantity ?? 1,
-      v.min_quantity ?? null, v.barcode ?? null, v.price ?? null, v.expires_on ?? null, v.favourite ?? 0,
+      v.min_quantity ?? null, v.barcode ?? null, v.nfc_id ?? null, v.price ?? null, v.expires_on ?? null, v.favourite ?? 0,
       user.id, user.id, t, t);
     const id = Number(r.lastInsertRowid);
+    if (v.nfc_id) releaseNfc(v.nfc_id, id);
     if (v.tag_ids) setTags(id, v.tag_ids);
     logActivity(user, id, 'create', `${user.display_name} voegde "${v.name}" toe`);
     return id;
@@ -264,16 +275,18 @@ function updateThing(user, id, b) {
     if (descendantIds(id).includes(v.parent_id)) throw bad('Je kunt een item niet in zichzelf of een onderliggend item plaatsen');
   }
   tx(db, () => {
-    const fields = ['parent_id', 'is_container', 'name', 'description', 'notes', 'quantity', 'min_quantity', 'barcode', 'price', 'expires_on', 'favourite'];
+    const fields = ['parent_id', 'is_container', 'name', 'description', 'notes', 'quantity', 'min_quantity', 'barcode', 'nfc_id', 'price', 'expires_on', 'favourite'];
     const sets = [], args = [];
     for (const f of fields) if (f in v) { sets.push(`${f} = ?`); args.push(v[f]); }
     sets.push('version = version + 1', 'updated_by = ?', 'updated_at = ?');
     args.push(user.id, now(), id);
     db.prepare(`UPDATE things SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+    if (v.nfc_id) releaseNfc(v.nfc_id, id);
     if (v.tag_ids) setTags(id, v.tag_ids);
     const moved = 'parent_id' in v && v.parent_id !== cur.parent_id;
     logActivity(user, id, moved ? 'move' : 'update', `${user.display_name} ${moved ? 'verplaatste' : 'wijzigde'} "${v.name || cur.name}"`);
   });
+  if ('expires_on' in v && v.expires_on !== cur.expires_on) jobs.expiryChanged(id);
 }
 
 function deleteImageFiles(rows) {
@@ -351,6 +364,7 @@ route('POST', '/api/logout', USER, ({ res, user }) => {
 });
 route('GET', '/api/me', USER, ({ user }) => ({ user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }, version: VERSION }));
 route('POST', '/api/me/password', USER, async ({ req, user }) => {
+  if (user._viaToken) throw new HttpError(403, 'Niet beschikbaar met een API-token');
   const b = await readJson(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
   if (!auth.verifyPassword(String(b.current || ''), u.password_hash)) throw new HttpError(403, 'Huidig wachtwoord klopt niet');
@@ -392,12 +406,14 @@ route('GET', '/api/things/:id', USER, ({ params }) => ({ thing: getThing(Number(
 route('POST', '/api/things', USER, async ({ req, user }) => {
   const id = createThing(user, await readJson(req));
   changed(user, 'thing', id, req);
+  jobs.checkLowStock(id);
   return { thing: getThing(id) };
 });
 route('PATCH', '/api/things/:id', USER, async ({ req, params, user }) => {
   const id = Number(params.id);
   updateThing(user, id, await readJson(req));
   changed(user, 'thing', id, req);
+  jobs.checkLowStock(id);
   return { thing: getThing(id) };
 });
 route('POST', '/api/things/:id/adjust', USER, async ({ req, params, user }) => {
@@ -412,6 +428,7 @@ route('POST', '/api/things/:id/adjust', USER, async ({ req, params, user }) => {
     logActivity(user, id, 'quantity', `${user.display_name} zette "${cur.name}" van ${cur.quantity} naar ${nq}`);
   });
   changed(user, 'thing', id, req);
+  jobs.checkLowStock(id);
   return { thing: getThing(id) };
 });
 route('DELETE', '/api/things/:id', USER, ({ req, params, user }) => {
@@ -463,14 +480,28 @@ route('POST', '/api/things/:id/images', USER, async ({ req, params, user }) => {
   if (db.prepare('SELECT COUNT(*) c FROM images WHERE thing_id = ?').get(thingId).c >= MAX_IMAGES_PER_THING) throw bad(`Maximaal ${MAX_IMAGES_PER_THING} foto's per item`);
   const buf = await readBody(req, MAX_IMAGE);
   if (!buf.length) throw bad('Leeg bestand');
+  return { image: storeImage(user, thingId, buf, mime, req) };
+});
+function storeImage(user, thingId, buf, mime, req) {
+  const ext = IMAGE_TYPES[mime];
   const pos = db.prepare('SELECT COALESCE(MAX(position),-1)+1 p FROM images WHERE thing_id = ?').get(thingId).p;
   const r = db.prepare('INSERT INTO images(thing_id,mime,ext,position,created_by,created_at) VALUES(?,?,?,?,?,?)').run(thingId, mime, ext, pos, user.id, now());
   const id = Number(r.lastInsertRowid);
   fs.writeFileSync(path.join(IMG_DIR, `${id}.${ext}`), buf);
   db.prepare('UPDATE things SET version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?').run(user.id, now(), thingId);
   changed(user, 'thing', thingId, req);
-  return { image: { id, mime, has_thumb: 0 } };
+  return { id, mime, has_thumb: 0 };
+}
+// Productfoto overnemen uit Open Food Facts (alleen die hosts; de server haalt hem op).
+route('POST', '/api/things/:id/images/import', USER, async ({ req, params, user }) => {
+  const thingId = Number(params.id);
+  if (!db.prepare('SELECT 1 FROM things WHERE id = ?').get(thingId)) throw new HttpError(404, 'Niet gevonden');
+  if (db.prepare('SELECT COUNT(*) c FROM images WHERE thing_id = ?').get(thingId).c >= MAX_IMAGES_PER_THING) throw bad(`Maximaal ${MAX_IMAGES_PER_THING} foto's per item`);
+  const img = await fetchImage(String((await readJson(req)).url || ''), MAX_IMAGE);
+  if (!img) throw bad('Kon de productfoto niet ophalen');
+  return { image: storeImage(user, thingId, img.buf, img.mime, req) };
 });
+route('GET', '/api/lookup/:code', USER, async ({ params }) => ({ product: await lookupBarcode(params.code) }));
 route('PUT', '/api/images/:id/thumb', USER, async ({ req, params }) => {
   const img = db.prepare('SELECT * FROM images WHERE id = ?').get(Number(params.id));
   if (!img) throw new HttpError(404, 'Niet gevonden');
@@ -547,6 +578,119 @@ route('GET', '/api/export.csv', USER, ({ res }) => {
   return res;
 });
 
+// ---------- API-tokens (Home Assistant, scripts, native app) ----------
+route('GET', '/api/tokens', USER, ({ user }) => ({
+  tokens: db.prepare('SELECT id, name, prefix, created_at, last_used_at FROM api_tokens WHERE user_id = ? ORDER BY id DESC').all(user.id),
+}));
+route('POST', '/api/tokens', USER, async ({ req, user }) => {
+  if (user._viaToken) throw new HttpError(403, 'Maak tokens aan vanuit de app');
+  const name = str((await readJson(req)).name, 60);
+  if (!name) throw bad('Geef het token een naam, bijv. "Home Assistant"');
+  const t = auth.createApiToken(db, user.id, name);
+  logActivity(user, null, 'token', `${user.display_name} maakte API-token "${name}" aan`);
+  return { id: t.id, token: t.token };
+});
+route('DELETE', '/api/tokens/:id', USER, ({ params, user }) => {
+  db.prepare('DELETE FROM api_tokens WHERE id = ? AND user_id = ?').run(Number(params.id), user.id);
+  return { ok: true };
+});
+
+// ---------- CSV-import ----------
+class DryRun extends Error {}
+function importRecords(user, records, { dryRun, skipDuplicates }) {
+  const stats = { created_items: 0, created_containers: 0, skipped: 0, created_tags: 0, errors: [] };
+  const containers = new Map();
+  for (const c of db.prepare('SELECT id, parent_id, name FROM things WHERE is_container = 1').all()) containers.set(`${c.parent_id || 0}|${c.name.toLowerCase()}`, c.id);
+  const tagIds = new Map(db.prepare('SELECT id, name FROM tags').all().map((t) => [t.name.toLowerCase(), t.id]));
+  const t = now();
+  const insThing = db.prepare(`INSERT INTO things(parent_id,is_container,name,description,notes,quantity,min_quantity,barcode,price,expires_on,created_by,updated_by,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const ensurePath = (names) => {
+    let parent = null;
+    for (const raw of names) {
+      const name = raw.slice(0, 200);
+      const key = `${parent || 0}|${name.toLowerCase()}`;
+      let id = containers.get(key);
+      if (!id) {
+        id = Number(insThing.run(parent, 1, name, '', '', 1, null, null, null, null, user.id, user.id, t, t).lastInsertRowid);
+        containers.set(key, id); stats.created_containers++;
+      }
+      parent = id;
+    }
+    return parent;
+  };
+  const tagId = (name) => {
+    const k = name.toLowerCase().slice(0, 60);
+    if (!tagIds.has(k)) { tagIds.set(k, Number(db.prepare('INSERT INTO tags(name) VALUES(?)').run(name.slice(0, 60)).lastInsertRowid)); stats.created_tags++; }
+    return tagIds.get(k);
+  };
+  const dup = db.prepare('SELECT 1 FROM things WHERE is_container = 0 AND lower(name) = lower(?) AND parent_id IS ?');
+  try {
+    tx(db, () => {
+      for (const r of records) {
+        try {
+          if (r.is_container) { const before = stats.created_containers; ensurePath([...r.location, r.name]); if (stats.created_containers === before) stats.skipped++; continue; }
+          const parent = ensurePath(r.location);
+          if (skipDuplicates && dup.get(r.name, parent)) { stats.skipped++; continue; }
+          const q = r.quantity == null ? 1 : Math.max(0, r.quantity);
+          const id = Number(insThing.run(parent, 0, r.name.slice(0, 200), r.description.slice(0, 2000), r.notes.slice(0, 10000), q, r.min_quantity, r.barcode && r.barcode.slice(0, 100), r.price, r.expires_on, user.id, user.id, t, t).lastInsertRowid);
+          for (const tg of r.tags) db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) VALUES(?,?)').run(id, tagId(tg));
+          stats.created_items++;
+        } catch (e) { stats.errors.push(`Regel ${r.line}: ${e.message}`); if (stats.errors.length > 50) throw e; }
+      }
+      if (dryRun) throw new DryRun();
+      logActivity(user, null, 'import', `${user.display_name} importeerde ${stats.created_items} items en ${stats.created_containers} containers`);
+    });
+  } catch (e) { if (!(e instanceof DryRun)) throw e; }
+  return stats;
+}
+route('POST', '/api/import.csv', USER, async ({ req, query, user }) => {
+  const text = (await readBody(req, 5 * 1024 * 1024)).toString('utf8');
+  let parsed;
+  try { parsed = rowsToRecords(parseCsv(text)); } catch (e) { throw bad(e.message); }
+  if (!parsed.records.length) throw bad('Geen regels gevonden om te importeren');
+  if (parsed.records.length > 5000) throw bad('Maximaal 5000 regels per import');
+  const dryRun = query.dry === '1';
+  const stats = importRecords(user, parsed.records, { dryRun, skipDuplicates: query.skip_duplicates !== '0' });
+  if (!dryRun) changed(user, 'thing', null, req);
+  return { dry_run: dryRun, rows: parsed.records.length, columns: parsed.columns, ...stats };
+});
+
+// ---------- back-ups (beheerder) ----------
+route('GET', '/api/backups', ADMIN, () => ({ backups: jobs.listBackups(), config: jobs.config }));
+route('POST', '/api/backups', ADMIN, ({ user }) => {
+  const name = jobs.makeBackup(new Date().toISOString().slice(0, 19).replace(/:/g, '-'));
+  logActivity(user, null, 'backup', `${user.display_name} maakte een back-up`);
+  return { name };
+});
+route('GET', '/api/backups/:name', ADMIN, ({ params, res }) => {
+  const file = jobs.backupFile(params.name);
+  if (!file) throw new HttpError(404, 'Back-up niet gevonden');
+  res.writeHead(200, { 'Content-Type': 'application/vnd.sqlite3', 'Content-Disposition': `attachment; filename="${params.name}"`, 'Content-Length': fs.statSync(file).size });
+  fs.createReadStream(file).pipe(res);
+  return res;
+});
+// Volledige back-up: verse database-kopie + alle foto's in één .tar
+route('GET', '/api/backup.tar', ADMIN, async ({ res }) => {
+  const snap = jobs.snapshot();
+  const entries = [{ name: 'mijn-spullen.db', file: snap }];
+  for (const f of fs.readdirSync(IMG_DIR)) entries.push({ name: `images/${f}`, file: path.join(IMG_DIR, f) });
+  res.writeHead(200, { 'Content-Type': 'application/x-tar', 'Content-Disposition': `attachment; filename="mijn-spullen-volledig-${new Date().toISOString().slice(0, 10)}.tar"`, 'Cache-Control': 'no-store' });
+  try { await writeTar(res, entries); } finally { fs.unlink(snap, () => {}); }
+  return res;
+});
+
+// ---------- Home Assistant ----------
+// Voor een REST-sensor in HA (met een API-token): aantallen en lijstjes.
+route('GET', '/api/summary', USER, () => jobs.summary());
+route('GET', '/api/integrations', USER, () => ({ ...jobs.config }));
+route('POST', '/api/integrations/ha/test', ADMIN, async ({ user }) => {
+  const r = await jobs.sendHa({ event: 'test', title: 'Mijn Spullen', message: `Testmelding van ${user.display_name}. Het werkt!`, items: [] });
+  if (!r.ok) throw bad(`Home Assistant-melding mislukt: ${r.reason || 'status ' + r.status}`);
+  return { ok: true };
+});
+route('POST', '/api/integrations/ha/expiring', ADMIN, async () => ({ result: await jobs.notifyExpiring(true) }));
+
 // ---------- statische bestanden ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 function serveStatic(req, res, pathname) {
@@ -560,7 +704,8 @@ function serveStatic(req, res, pathname) {
   const ext = path.extname(file);
   res.writeHead(200, {
     'Content-Type': MIME[ext] || 'application/octet-stream',
-    'Cache-Control': rel === '/sw.js' || rel === '/index.html' ? 'no-cache' : 'public, max-age=3600',
+    // App-code altijd hervalideren, zodat een nieuwe versie direct overal actief is; iconen mogen langer.
+    'Cache-Control': /\.(html|js|css|webmanifest)$/.test(rel) ? 'no-cache' : 'public, max-age=86400',
   });
   fs.createReadStream(file).pipe(res);
 }
@@ -592,7 +737,8 @@ const server = http.createServer(async (req, res) => {
       if (matched.opts.admin && user.role !== 'admin') throw new HttpError(403, 'Alleen voor beheerders');
     }
     // CSRF-bescherming: schrijfacties moeten een eigen header meesturen (kan cross-site niet zonder CORS).
-    if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-requested-with'] !== 'mijn-spullen') {
+    // Met een API-token (Authorization-header) is er geen cookie in het spel en dus geen CSRF-risico.
+    if (!['GET', 'HEAD'].includes(req.method) && !(user && user._viaToken) && req.headers['x-requested-with'] !== 'mijn-spullen') {
       throw new HttpError(403, 'Ongeldig verzoek');
     }
     const result = await matched.handler({ req, res, params, query: Object.fromEntries(url.searchParams), user });
@@ -610,6 +756,7 @@ const server = http.createServer(async (req, res) => {
 setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 3600e3).unref();
 
 if (require.main === module) {
+  jobs.start();
   server.listen(PORT, () => console.log(`Mijn Spullen ${VERSION} luistert op :${PORT} (data: ${DATA_DIR})`));
 }
-module.exports = { server, db };
+module.exports = { server, db, jobs };
