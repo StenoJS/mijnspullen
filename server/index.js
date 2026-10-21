@@ -687,7 +687,7 @@ route('POST', '/api/import/findmystuff/:token', ADMIN, async ({ req, params, use
   if (parentId && !db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = 1').get(parentId)) throw bad('Doelcontainer bestaat niet');
   const parsed = fms.parseBackup(fs.readFileSync(file));
   const stats = fms.importBackup(parsed, {
-    db, tx, user, now, parentId,
+    db, tx, user, now, parentId, attachOnly: !!b.attach_only,
     storeImageFile: (thingId, data, mime, position) => {
       const ext = IMAGE_TYPES[mime];
       const id = Number(db.prepare('INSERT INTO images(thing_id,mime,ext,position,created_by,created_at) VALUES(?,?,?,?,?,?)').run(thingId, mime, ext, position, user.id, now()).lastInsertRowid);

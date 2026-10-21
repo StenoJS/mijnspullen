@@ -52,14 +52,14 @@ test('Find my stuff-back-up importeren', async () => {
       { id: 5, name: 'Trivial Pursuit', parentId: 2, isVisuallyStorage: false, quantity: 0, barcode: '8715600240801', dateExpiration: '2025-11-19', datePurchase: '2021-12-15' },
     ],
     tagBackupList: [{ id: 1, name: 'Lego', colorId: 3 }],
-    thingTagsBackupList: [{ thingId: 3, tagIds: [1] }],
+    thingTagsBackupList: [{ thingId: '3', tagIds: ['1'] }],
     images: [
-      { id: 1, itemId: 3, uri: 'photo_1.jpg', isPrimary: false },
-      { id: 2, itemId: 3, uri: 'images/detail/3/photo_2.jpg', isPrimary: true },
-      { id: 3, itemId: 2, uri: 'content://x/files/photo_3.jpg', isPrimary: true },
+      { id: 'a1', itemId: '3', uri: 'images/photo_1.jpg', isPrimary: false },
+      { id: 'a2', itemId: '3', uri: 'images/detail/3/photo_2.jpg', isPrimary: true },
+      { id: 'a3', itemId: '2', uri: 'images/photo_3.jpg', isPrimary: true },
     ],
   };
-  const zip = makeZip({ 'backup.txt': Buffer.from(JSON.stringify(backup)), 'photo_1.jpg': jpg, 'images/detail/3/photo_2.jpg': jpg, 'images/detail/2/photo_3.jpg': jpg });
+  const zip = makeZip({ 'backup.txt': Buffer.from(JSON.stringify(backup)), 'photo_1.jpg': jpg, 'images/detail/3/photo_2.jpg': jpg, 'photo_3.jpg': jpg });
   const up = await call('POST', '/api/import/findmystuff', zip, 'application/zip');
   assert.equal(up.status, 200, JSON.stringify(up.body));
   assert.equal(up.body.summary.containers, 2);
@@ -84,4 +84,12 @@ test('Find my stuff-back-up importeren', async () => {
   assert.equal((await call('GET', '/api/images-without-thumb')).body.ids.length, 3);
   assert.equal((await call('POST', `/api/import/findmystuff/${up.body.token}`, '{}', 'application/json')).status, 404, 'token is eenmalig');
   assert.equal((await call('POST', '/api/import/findmystuff', Buffer.from('geen zip'), 'application/zip')).status, 400);
+
+  // Aanvullen bij een eerdere import: niets dubbel aanmaken
+  const up2 = await call('POST', '/api/import/findmystuff', zip, 'application/zip');
+  const ap2 = (await call('POST', `/api/import/findmystuff/${up2.body.token}`, JSON.stringify({ attach_only: true }), 'application/json')).body.stats;
+  assert.equal(ap2.created_things, 0);
+  assert.equal(ap2.matched_things, 5, 'ook beide Trivial Pursuits');
+  assert.equal(ap2.imported_images, 0, 'had al foto\'s');
+  assert.equal((await call('GET', '/api/things?q=trivial')).body.things.length, 2);
 });

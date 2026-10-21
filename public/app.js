@@ -753,6 +753,7 @@ async function makeMissingThumbs(onProgress) {
 function fmsDialog() {
   return openDialog((close) => {
     const file = h('input', { type: 'file', accept: '.bckp,.zip,application/zip,application/octet-stream' });
+    const attach = h('input', { type: 'checkbox' });
     const out = h('div');
     const err = h('div', { class: 'error' });
     const status = h('p', { class: 'meta', style: 'margin:0' });
@@ -779,11 +780,11 @@ function fmsDialog() {
               e.currentTarget.disabled = true;
               status.textContent = 'Importeren…';
               try {
-                const { stats } = await api('POST', `/api/import/findmystuff/${r.token}`, {});
+                const { stats } = await api('POST', `/api/import/findmystuff/${r.token}`, { attach_only: attach.checked });
                 await loadTags();
                 status.textContent = 'Thumbnails maken…';
                 await makeMissingThumbs((n, t) => { status.textContent = `Thumbnails maken… ${n}/${t}`; });
-                toast(`Geïmporteerd: ${stats.created_things} spullen, ${stats.imported_images} foto's`);
+                toast(attach.checked ? `Aangevuld: ${stats.imported_images} foto's bij ${stats.matched_things} gevonden spullen` : `Geïmporteerd: ${stats.created_things} spullen, ${stats.imported_images} foto's`);
                 close(true);
               } catch (ex) { err.textContent = ex.message; status.textContent = ''; }
             } }, 'Importeren')));
@@ -792,7 +793,7 @@ function fmsDialog() {
     };
     return h('div', { class: 'dlg' }, h('h2', {}, 'Find my stuff importeren'),
       h('p', { class: 'meta', style: 'margin:0' }, 'Kies de back-up uit Find my stuff (.bckp, te vinden in Google Drive onder com.miquelcms.homeorganizer.backups). Containers, items, tags, barcodes, prijzen en foto\'s komen mee.'),
-      file, status, err, out,
+      file, h('label', { class: 'check' }, attach, 'Al eerder geïmporteerd: alleen ontbrekende foto\'s en tags aanvullen'), status, err, out,
       h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Sluiten'), btn));
   });
 }
