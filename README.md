@@ -1,0 +1,104 @@
+# Mijn Spullen — 0.1.0-alpha.1
+
+Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
+met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
+
+Functionele inspiratie: de Android-app *Find my stuff* (geneste containers, tags, aantallen met drempel,
+houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die app overgenomen.
+
+## Wat zit er in 0.1 alpha
+
+- Inloggen met gebruikersaccounts (eerste account = beheerder; beheerder voegt anderen toe, blokkeert, reset wachtwoorden)
+- Eén gedeelde inventaris voor iedereen, **live bijgewerkt** bij wijzigingen van anderen (SSE)
+- Onbeperkt geneste containers (huis → kamer → kast → doos) met items erin
+- Items: naam, aantal (+/− direct in de lijst), "bijna op"-drempel, prijs, houdbaar tot, barcode/QR, omschrijving, notities, favoriet
+- Tags met hiërarchie en kleur; filteren op een tag neemt subtags mee
+- Zoeken (woorden in naam/omschrijving/notities/barcode/tag) + filters: bijna op, verloopt binnen 30 dagen, favoriet, tag
+- Barcode/QR scannen met de camera (browser `BarcodeDetector`, handmatige invoer als terugval)
+- Tot 10 foto's per item, in de browser verkleind (max 1600 px) + thumbnail
+- Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
+- Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
+- Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+**Nog niet in 0.1:** import (CSV/FindMyStuff), offline gebruik, herinneringsmeldingen, NFC, meerdere inventarissen/rechten per gebruiker,
+automatische back-up, labels printen. Zie "Roadmap".
+
+## Draaien in Portainer (patroon: `*.steno.nl`, netwerk `hassio`, NPM)
+
+### 1. Image bouwen
+Kies één van deze twee:
+
+**A. Vanuit een Git-repository (aanbevolen)** — zet de map in een (privé) repo en maak in Portainer een stack:
+*Stacks → Add stack → Repository*, Compose path `docker-compose.yml`, daarna *Deploy the stack*.
+
+**B. Zonder Git** — op de Docker-host (of via Portainer → *Images → Build a new image → Upload*, tar van deze map):
+
+```bash
+cd /pad/naar/mijn-spullen
+docker build -t mijn-spullen:0.1.0-alpha.1 .
+```
+
+Maak daarna in Portainer een stack (*Web editor*) met de inhoud van `docker-compose.yml` (de regel `build: .` mag dan weg).
+
+### 2. Reverse proxy (Nginx Proxy Manager)
+Nieuwe Proxy Host:
+
+| Veld | Waarde |
+|---|---|
+| Domain Names | `spullen.steno.nl` (of een andere naam) |
+| Scheme / Forward Hostname / Port | `http` / `mijn-spullen` / `3000` (hostnaam, **geen** container-IP) |
+| Websockets Support | aan (niet verplicht; SSE werkt ook zonder) |
+| SSL | Request new Let's Encrypt certificate, Force SSL aan |
+
+Voor live-updates (SSE) mag NPM de respons niet bufferen. Zet in het tabblad *Advanced*:
+
+```nginx
+proxy_buffering off;
+proxy_read_timeout 1h;
+```
+
+### 3. Eerste keer
+Open `https://spullen.steno.nl`, maak het beheerdersaccount aan, voeg daarna de gezinsleden toe onder *Meer → Gebruiker toevoegen*.
+Camera (scannen/foto's) werkt alleen via HTTPS.
+
+## Lokaal ontwikkelen / testen
+
+Vereist Node ≥ 22.13.
+
+```bash
+cd mijn-spullen
+npm test
+DATA_DIR=./data PORT=3000 COOKIE_SECURE=0 node --disable-warning=ExperimentalWarning server/index.js
+```
+
+Open http://localhost:3000.
+
+## Back-up
+
+Alles staat in het volume `mijn-spullen-data` (SQLite-bestand + map `images`). Stop de container kort en kopieer het volume:
+
+```bash
+docker stop mijn-spullen
+docker run --rm -v mijn-spullen-data:/data -v "$PWD":/backup alpine tar czf /backup/mijn-spullen-backup-$(date +%F).tgz -C /data .
+docker start mijn-spullen
+```
+
+## Opbouw
+
+```
+server/index.js   HTTP-server, API-routes, SSE, statische bestanden
+server/db.js      SQLite-schema + migraties (node:sqlite)
+server/auth.js    wachtwoorden (scrypt), sessies, rate limit
+public/           PWA: index.html, app.js (views), lib.js (hulpfuncties), style.css, sw.js
+test/             API-test (node --test)
+```
+
+Beveiliging: wachtwoorden met scrypt, sessiecookie `HttpOnly; SameSite=Lax; Secure`, CSRF-header op alle schrijfacties,
+login rate limit (10 pogingen / 15 min), strikte Content-Security-Policy, CSV-export beschermd tegen formule-injectie.
+
+## Roadmap (voorstel)
+
+1. 0.2 — CSV-import (ook voor een FindMyStuff-export), automatische back-up naar een tweede locatie
+2. 0.3 — Herinneringen (houdbaarheid/voorraad) via Home Assistant of Telegram, labels/QR-stickers printen
+3. 0.4 — Meerdere inventarissen met rechten per gebruiker, offline-modus met synchronisatie
+4. Optioneel — PostgreSQL in plaats van SQLite

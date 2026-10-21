@@ -1,0 +1,15 @@
+{
+  "name": "mijn-spullen",
+  "version": "0.1.0-alpha.1",
+  "description": "Mijn Spullen — zelf gehoste, multiuser inventaris-app voor thuis",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": { "node": ">=22.13" },
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "DATA_DIR=./data PORT=3000 node --watch server/index.js",
+    "test": "node --test \"test/*.test.js\""
+  }
+}

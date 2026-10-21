@@ -1,0 +1,25 @@
+# Mijn Spullen — Portainer-stack (volgt het vaste patroon: netwerk "hassio", reverse proxy via NPM)
+services:
+  mijn-spullen:
+    build: .
+    image: mijn-spullen:0.1.0-alpha.1
+    container_name: mijn-spullen
+    restart: unless-stopped
+    environment:
+      TZ: Europe/Amsterdam
+      TRUST_PROXY: "1"     # achter Nginx Proxy Manager: echte client-IP uit X-Forwarded-For
+      COOKIE_SECURE: "1"   # alleen via HTTPS; zet op "0" voor een test op http://IP:3000
+    volumes:
+      - mijn-spullen-data:/data
+    networks:
+      - hassio
+    # Alleen nodig voor een snelle test zonder NPM:
+    # ports:
+    #   - "3000:3000"
+
+volumes:
+  mijn-spullen-data:
+
+networks:
+  hassio:
+    external: true
