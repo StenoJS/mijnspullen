@@ -58,7 +58,7 @@ test('dozenlijst importeren zonder dubbelen', async () => {
   assert.equal(r.boxes, 2, 'Box 104 en 201 (114 is leeg en wordt overgeslagen)');
   assert.equal(r.items, 4); // 10211, "Lego uitzoeken, halfvol", 21338, 10312
   const inZolder = (await a('GET', `/api/things?parent=${zolder.id}`)).body.things.map((t) => t.name).sort();
-  assert.deepEqual(inZolder, ['Box 101', 'Box 104', 'Box 201']);
+  assert.deepEqual(inZolder, ['Box 101', 'Doos 104', 'Doos 201']);
   // Nog een keer: niets nieuws meer.
   const again = (await a('POST', '/api/import/boxes', csv, { 'content-type': 'text/csv' })).body;
   assert.equal(again.boxes.flatMap((b) => b.items).filter((i) => i.status === 'new').length, 0);

@@ -574,7 +574,7 @@ function storeImage(user, thingId, buf, mime, req) {
   return { id, mime, has_thumb: 0 };
 }
 // ---------- Lego-sets (Rebrickable-database) ----------
-const LEGO_NAME = /^\s*(?:lego\s*)?#?\s*(\d{3,7}(?:-\d{1,2})?)\s*$/i;
+const LEGO_NAME = /^\s*(?:lego\s*)?#?\s*(\d{4,7}(?:-\d{1,2})?)\s*$/i; // 4+ cijfers: doosnummers (101) zijn geen sets
 const legoLookup = async (code) => { try { return await lego.lookup(code); } catch (e) { throw new HttpError(502, e.message); } };
 route('GET', '/api/lego/:code', USER, async ({ params }) => {
   const set = await legoLookup(params.code);
@@ -1054,7 +1054,7 @@ route('POST', '/api/import/boxes/apply', USER, async ({ req, user }) => {
       const items = Array.isArray(box.items) ? box.items.slice(0, 200) : [];
       if (!boxId) {
         if (!items.length && !box.create_empty) continue;
-        boxId = Number(ins.run(parent, 1, str(box.name || `Box ${box.number}`, 200), str((box.notes || []).join(', '), 2000), '', 1, user.id, user.id, t, t).lastInsertRowid);
+        boxId = Number(ins.run(parent, 1, str(box.name || `Doos ${box.number}`, 200), str((box.notes || []).join(', '), 2000), '', 1, user.id, user.id, t, t).lastInsertRowid);
         stats.boxes++;
       }
       for (const it of items) {
@@ -1247,7 +1247,27 @@ const server = http.createServer(async (req, res) => {
 // verlopen sessies opruimen
 setInterval(() => db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now()), 3600e3).unref();
 
+// Eenmalig: dozen consequent "Doos 101" noemen (was "101" of "Box 101"); dubbele dozen daarna samenvoegen.
+function renameBoxes() {
+  if (db.prepare("SELECT 1 FROM meta WHERE key = 'boxes_renamed_v1'").get()) return;
+  const rows = db.prepare('SELECT id, parent_id, name FROM things WHERE is_container = 1').all()
+    .map((t) => ({ ...t, m: t.name.match(/^\s*(?:box|doos)?\s*#?\s*(\d{1,4})\s*$/i) })).filter((t) => t.m && t.name !== `Doos ${Number(t.m[1])}`);
+  const admin = db.prepare("SELECT * FROM users WHERE role = 'admin' ORDER BY id LIMIT 1").get();
+  if (!admin) return; // nog geen account: later opnieuw
+  if (rows.length) {
+    jobs.makeBackup(new Date().toISOString().slice(0, 19).replace(/:/g, '-'));
+    tx(db, () => { for (const t of rows) db.prepare('UPDATE things SET name = ?, version = version + 1, updated_at = ? WHERE id = ?').run(`Doos ${Number(t.m[1])}`, now(), t.id); });
+    const groups = db.prepare(`SELECT parent_id, name, GROUP_CONCAT(id) ids FROM things WHERE is_container = 1 AND name LIKE 'Doos %' GROUP BY parent_id, name HAVING COUNT(*) > 1`).all();
+    let merged = 0;
+    for (const g of groups) { const ids = g.ids.split(',').map(Number).sort((a, b) => a - b); merged += mergeGroup(admin, ids[0], ids.slice(1), false).merged; }
+    logActivity(admin, null, 'rename', `${rows.length} dozen hernoemd naar "Doos …"${merged ? `, ${merged} dubbele dozen samengevoegd` : ''}`);
+    console.log(`Dozen hernoemd: ${rows.length}, samengevoegd: ${merged}`);
+  }
+  db.prepare("INSERT OR REPLACE INTO meta(key, value) VALUES('boxes_renamed_v1', ?)").run(now());
+}
+
 if (require.main === module) {
+  try { renameBoxes(); } catch (e) { console.error('Dozen hernoemen mislukt:', e.message); }
   jobs.start();
   server.listen(PORT, () => console.log(`Mijn Spullen ${VERSION} luistert op :${PORT} (data: ${DATA_DIR})`));
 }

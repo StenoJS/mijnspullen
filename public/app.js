@@ -477,7 +477,7 @@ async function viewThing(id, q, token) {
     drawLoc();
   } });
   // Naam is een Lego-setnummer (bijv. 31077 of "Lego 60050")? Dan naam, omschrijving, tag en foto laten invullen.
-  const LEGO_RE = /^\s*(?:lego\s*)?#?\s*(\d{3,7}(?:-\d{1,2})?)\s*$/i;
+  const LEGO_RE = /^\s*(?:lego\s*)?#?\s*(\d{4,7}(?:-\d{1,2})?)\s*$/i;
   const legoHint = h('div');
   const drawLego = () => {
     const m = String(f.name || '').match(LEGO_RE);
@@ -839,7 +839,7 @@ function boxImportDialog() {
   return openDialog((close) => {
     const fileI = h('input', { type: 'file', accept: '.ods,.csv,text/csv', style: 'display:none' });
     const body = h('div', { class: 'dlg-scroll' },
-      h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Een sheet met per regel een doosnummer en in de cellen ernaast wat erin zit (setnummers, namen). De app zoekt bestaande dozen ("Box 101", "Doos 101") en spullen op, en stelt alleen voor wat nog ontbreekt.'),
+      h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Een sheet met per regel een doosnummer en in de cellen ernaast wat erin zit (setnummers, namen). De app zoekt bestaande dozen ("Doos 101", "101") en spullen op, en stelt alleen voor wat nog ontbreekt.'),
       h('button', { class: 'btn primary', onclick: () => fileI.click() }, icon('upload'), 'Kies .ods of .csv'));
     const actions = h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(false) }, 'Sluiten'));
     fileI.onchange = async () => {
@@ -863,7 +863,7 @@ function boxImportDialog() {
       const st = { exists: 'al aanwezig', elsewhere: 'staat elders', new: 'nieuw' };
       const cards = p.boxes.map((b) => {
         const fresh = b.items.filter((i) => i.status !== 'exists');
-        const head = h('div', { class: 'dup-head' }, h('b', {}, b.existing ? b.existing.name : `Box ${b.number}`),
+        const head = h('div', { class: 'dup-head' }, h('b', {}, b.existing ? b.existing.name : `Doos ${b.number}`),
           h('span', { class: 'meta' }, [b.existing ? `bestaat · ${b.existing.path}` : 'nieuwe doos', b.mark ? `"${b.mark}" in lijst` : '', b.notes.join(', ')].filter(Boolean).join(' · ')));
         const rows = b.items.map((it) => {
           if (it.status === 'exists') return h('div', { class: 'imp-row done' }, icon('check'), h('div', { class: 'main' }, h('div', { class: 'name' }, it.match.name), h('div', { class: 'sub' }, 'al aanwezig')));

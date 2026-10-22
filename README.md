@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.8.0
+# Mijn Spullen — 0.8.1
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -26,6 +26,8 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   de cellen ernaast de inhoud. Bestaande dozen ("Box 101", "Doos 101") en spullen worden herkend (Lego op setnummer, de
   rest op naam), dus alleen wat ontbreekt staat aangevinkt; wat al op een andere plek staat wordt gemeld maar niet
   aangevinkt. Lego-setnummers krijgen naam, thema, tag en foto. Er wordt vooraf een back-up gemaakt.
+- Dozen heten consequent **"Doos 101"** (0.8.1): bestaande "101" en "Box 101" worden eenmalig hernoemd en dubbele
+  dozen met hetzelfde nummer op dezelfde plek samengevoegd (back-up vooraf).
 
 ### Nieuw in 0.7
 
