@@ -93,9 +93,10 @@ function renderAuth(mode) {
 function shell(title, opts = {}) {
   const main = h('main');
   const back = opts.back != null && h('a', { class: 'btn icon ghost', href: opts.back, 'aria-label': 'Terug' }, icon('back'));
+  const crowded = flat(opts.actions).length >= 5; // titel dan op een eigen regel
   const nav = [['#/', 'home', 'Spullen', (r) => r === 'home'], ['#/search', 'search', 'Zoeken', (r) => r === 'search'], ['#/tags', 'tag', 'Tags', (r) => r === 'tags'], ['#/more', 'more', 'Meer', (r) => r === 'more']];
   app.replaceChildren(h('div', { class: 'shell' },
-    h('header', { class: 'topbar' }, back, h('h1', {}, title), opts.actions),
+    h('header', { class: 'topbar' + (crowded ? ' crowded' : '') }, back, h('h1', {}, title), crowded && h('span', { class: 'spacer' }), opts.actions),
     main,
     h('nav', { class: 'nav' }, h('div', { class: 'nav-in' }, nav.map(([href, ic, label, on]) => h('a', { href, class: on(opts.tab) ? 'on' : '' }, icon(ic), label))))));
   window.scrollTo(0, 0);

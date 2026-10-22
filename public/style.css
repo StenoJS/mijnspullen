@@ -59,13 +59,13 @@ main { flex: 1; padding: 4px 16px 110px; }
 .crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: .88rem; color: var(--muted); margin: 0 0 10px; }
 .crumbs a { color: var(--muted); text-decoration: none; }
 .crumbs a:hover { color: var(--accent); }
-.list { display: grid; gap: 8px; }
+.list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
 .row { display: flex; align-items: center; gap: 12px; background: var(--surface); border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); text-decoration: none; color: var(--text); min-height: 64px; }
 .thumb { width: 48px; height: 48px; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; color: var(--muted); overflow: hidden; flex: none; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .row.container .thumb { background: var(--accent-soft); color: var(--accent); }
 .row .main { flex: 1; min-width: 0; }
-.row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .name { font-weight: 600; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.25; }
 .row .sub { color: var(--muted); font-size: .84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 3px; }
 .badge { font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
@@ -186,6 +186,10 @@ svg.qr { width: 100%; height: 100%; display: block; }
 .filter-note svg { width: 18px; height: 18px; flex: none; }
 .filter-note span { flex: 1; min-width: 0; }
 .topbar > .btn.sm { flex: none; }
+/* Veel knoppen in de bovenbalk (in een doos of kamer): titel op een eigen regel eronder. */
+.topbar.crowded { flex-wrap: wrap; row-gap: 2px; }
+.topbar.crowded h1 { order: 1; flex-basis: 100%; white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.topbar.crowded .spacer { margin-left: auto; }
 .stat.warn b { color: var(--warn); }
 .row .pickbox { width: 24px; height: 24px; border-radius: 7px; border: 2px solid var(--line); display: grid; place-items: center; flex: none; color: transparent; }
 .row.picked { outline: 2px solid var(--accent); background: var(--accent-soft); }
@@ -238,3 +242,9 @@ svg.qr { width: 100%; height: 100%; display: block; }
 .imp-row .sub { color: var(--muted); font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .imp-row.done { opacity: .55; }
 .imp-row.done svg { width: 18px; height: 18px; color: var(--accent); }
+@media (max-width: 420px) {
+  .row { gap: 10px; padding: 10px; }
+  .row .thumb { width: 44px; height: 44px; }
+  .qty button { width: 30px; height: 30px; }
+  .qty output { min-width: 24px; }
+}
