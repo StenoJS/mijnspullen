@@ -151,7 +151,7 @@ function bulkBar(redraw) {
   const bar = h('div', { class: 'bulkbar' }, h('div', { class: 'bulkbar-in' }, count,
     h('button', { class: 'btn sm', onclick: async () => { const r = await pickLocation(null, null, true); if (r) run({ action: 'move', parent_id: r.id }, (n) => `${n} verplaatst`); } }, icon('move'), 'Verplaatsen'),
     h('button', { class: 'btn sm', onclick: async () => { const t = await pickTag(); if (t) run({ action: t.remove ? 'untag' : 'tag', tag_id: t.id }, (n) => `Tag ${t.remove ? 'weggehaald bij' : 'gezet op'} ${n}`); } }, icon('tag'), 'Tag'),
-    h('button', { class: 'btn sm', onclick: () => run({ action: 'list', value: true }, (n) => `${n} op de boodschappenlijst`) }, icon('cart'), 'Op lijst'),
+    h('button', { class: 'btn sm', onclick: () => run({ action: 'list', value: true }, (n) => `${n} op de lijst`) }, icon('cart'), 'Op lijst'),
     h('button', { class: 'btn sm danger', onclick: async () => {
       if (!sel.ids.size) return;
       if (await confirmDialog(`${sel.ids.size} dingen verwijderen?`, `Ze gaan naar de prullenbak (Meer → Prullenbak) en zijn daar ${30} dagen terug te zetten. Wat erin zit gaat mee.`)) run({ action: 'delete' }, (n) => `${n} naar de prullenbak`);
@@ -209,11 +209,13 @@ function thingRow(t, { showPath } = {}) {
 }
 
 // ============ bladeren ============
+// Ster in de bovenbalk: alleen favorieten tonen (hier en in alles eronder). Blijft aan tot je hem weer uitzet.
+let favOnly = false;
 async function viewBrowse(id, token) {
   const load = async () => {
     const [cur, list, stats] = await Promise.all([
       id ? api('GET', `/api/things/${id}`) : null,
-      api('GET', `/api/things?parent=${id || 'root'}`),
+      api('GET', favOnly ? `/api/things?favourite=1${id ? `&scope=${id}` : ''}` : `/api/things?parent=${id || 'root'}`),
       id ? null : api('GET', '/api/stats'),
     ]);
     if (stale(token)) return;
@@ -221,7 +223,8 @@ async function viewBrowse(id, token) {
     const parentHref = c ? (c.path.length ? `#/c/${c.path[c.path.length - 1].id}` : '#/') : null;
     const main = shell(c ? c.name : 'Mijn Spullen', {
       tab: 'home', back: parentHref,
-      actions: [selectBtn(load), h('a', { class: 'btn icon ghost', href: `#/labels/${id || 0}`, 'aria-label': 'Labels printen', title: 'Labels printen' }, icon('qr')),
+      actions: [h('button', { class: 'btn icon ghost' + (favOnly ? ' primary' : ''), 'aria-label': 'Alleen favorieten', 'aria-pressed': String(favOnly), title: 'Alleen favorieten', onclick: () => { favOnly = !favOnly; load(); } }, icon('star')),
+        selectBtn(load), h('a', { class: 'btn icon ghost', href: `#/labels/${id || 0}`, 'aria-label': 'Labels printen', title: 'Labels printen' }, icon('qr')),
         c && h('a', { class: 'btn icon ghost', href: `#/t/${c.id}`, 'aria-label': 'Bewerken' }, icon('more')), scanBtn(id)],
     });
     if (!c) {
@@ -230,17 +233,18 @@ async function viewBrowse(id, token) {
         h('form', { class: 'search', onsubmit: (e) => { e.preventDefault(); location.hash = `#/search?q=${encodeURIComponent(e.target.q.value)}`; } }, icon('search'), h('input', { name: 'q', placeholder: 'Zoek in al je spullen…', type: 'search', 'aria-label': 'Zoeken' })),
         h('div', { class: 'stats' },
           h('a', { class: 'stat', href: '#/search' }, h('b', {}, num(s.items)), h('span', {}, 'items')),
-          h('a', { class: 'stat' + (s.shopping ? ' alert' : ''), href: '#/shopping' }, h('b', {}, num(s.shopping)), h('span', {}, 'boodschappen')),
+          h('a', { class: 'stat' + (s.shopping ? ' alert' : ''), href: '#/shopping' }, h('b', {}, num(s.shopping)), h('span', {}, 'op lijst')),
           h('a', { class: 'stat' + (s.expiring ? ' warn' : ''), href: '#/search?expiring=30' }, h('b', {}, num(s.expiring)), h('span', {}, 'verloopt')),
           h('a', { class: 'stat', href: '#/search?lent=1' }, h('b', {}, num(s.lent)), h('span', {}, 'uitgeleend'))));
     } else {
       main.append(h('nav', { class: 'crumbs', 'aria-label': 'Locatie' }, h('a', { href: '#/' }, 'Alles'), c.path.map((p) => [' › ', h('a', { href: `#/c/${p.id}` }, p.name)]), ' › ', h('b', {}, c.name)));
     }
-    if (!list.things.length) {
+    if (favOnly) main.append(h('div', { class: 'filter-note' }, icon('star'), h('span', {}, list.things.length ? `Alleen favorieten${c ? ` in ${c.name}` : ''}` : 'Nog geen favorieten hier. Zet bij een item "Favoriet" aan.'), h('button', { class: 'btn sm ghost', onclick: () => { favOnly = false; load(); } }, 'Alles tonen')));
+    if (favOnly && !list.things.length) { /* melding staat er al */ } else if (!list.things.length) {
       main.append(h('div', { class: 'empty' }, c ? 'Hier staat nog niets.' : 'Begin met een plek, bijvoorbeeld "Huis" of "Zolder".', h('br'),
         h('a', { class: 'btn primary', href: `#/new?container=1${id ? `&parent=${id}` : ''}` }, icon('plus'), 'Nieuwe container')));
     } else {
-      main.append(h('div', { class: 'list' }, list.things.map((t) => thingRow(t))));
+      main.append(h('div', { class: 'list' }, list.things.map((t) => thingRow(t, { showPath: favOnly }))));
     }
     if (sel.on) main.append(bulkBar(load));
     else main.append(h('button', { class: 'fab', 'aria-label': 'Toevoegen', onclick: () => addDialog(id) }, icon('plus')));
@@ -610,7 +614,7 @@ async function viewThing(id, q, token) {
         h('button', { class: 'btn sm primary', type: 'button', onclick: async () => {
           try { await api('PATCH', `/api/things/${id}`, { lent_to: '', version: t.version }); toast(`"${t.name}" is terug`); dirty = false; route(); } catch (ex) { toast(ex.message, true); }
         } }, icon('undo'), 'Is terug'))));
-  const listBtn = h('button', { type: 'button', class: 'btn sm' + (f.on_list ? ' primary' : ''), onclick: (e) => { f.on_list = !f.on_list; dirty = true; e.currentTarget.classList.toggle('primary', !!f.on_list); } }, icon('cart'), 'Op boodschappenlijst');
+  const listBtn = h('button', { type: 'button', class: 'btn sm' + (f.on_list ? ' primary' : ''), onclick: (e) => { f.on_list = !f.on_list; dirty = true; e.currentTarget.classList.toggle('primary', !!f.on_list); } }, icon('cart'), 'Op de lijst');
   itemOnly.push(lendBox, listBtn);
   if (f.is_container) [lendBox, listBtn].forEach((el) => { el.style.display = 'none'; });
   const favBtn = h('button', { type: 'button', class: 'btn sm', onclick: (e) => { f.favourite = !f.favourite; dirty = true; e.currentTarget.classList.toggle('primary', f.favourite); } }, icon('star'), 'Favoriet');
@@ -624,7 +628,7 @@ async function viewThing(id, q, token) {
       ...(f.is_container ? {} : { lent_to: f.lent_to || '', lent_due: f.lent_to ? f.lent_due : '', on_list: !!f.on_list }),
       quantity: f.is_container ? (f.quantity === '' ? 1 : f.quantity) : f.quantity, min_quantity: f.is_container ? '' : f.min_quantity, price: f.is_container ? '' : f.price,
     };
-    saveBtn.disabled = true;
+    saveBtn.disabled = true; topSave.disabled = true;
     try {
       if (isNew) {
         const r = await api('POST', '/api/things', body);
@@ -652,20 +656,20 @@ async function viewThing(id, q, token) {
           }
         }
       }
-    } catch (ex) { err.textContent = ex.message; } finally { saveBtn.disabled = false; }
+    } catch (ex) { err.textContent = ex.message; } finally { saveBtn.disabled = false; topSave.disabled = false; }
   };
   const saveBtn = h('button', { class: 'btn primary', type: 'submit' }, isNew ? 'Toevoegen' : 'Opslaan');
 
   const form = h('form', { class: 'card', onsubmit: save },
     typeSeg,
     h('div', { class: 'field' }, h('label', {}, 'Naam'), nameI, legoHint),
+    h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), descI),
     h('div', { class: 'field' }, h('span', { class: 'label' }, 'Locatie'), locBtn),
     h('div', { class: 'grid2' }, qtyF, minF),
     h('div', { class: 'field' }, h('label', {}, "Foto's"), photoBox, fileI, camI),
     h('div', { class: 'field' }, h('label', {}, 'Tags'), tagBox),
     h('div', { class: 'grid2' }, priceF, h('div', { class: 'field' }, h('label', {}, 'Houdbaar tot'), inp('expires_on', { type: 'date' }))),
     h('div', { class: 'field' }, h('label', {}, 'Barcode / QR'), h('div', { class: 'inline' }, barcodeI, lookupBtn, scanInto)),
-    h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), descI),
     nfcField,
     lendBox,
     h('div', { class: 'field' }, h('label', {}, 'Notities'), h('textarea', { oninput: (e) => { f.notes = e.target.value; dirty = true; } }, f.notes)),
@@ -687,6 +691,9 @@ async function viewThing(id, q, token) {
     h('div', { class: 'main' }, h('b', {}, 'Label & NFC'), h('div', { class: 'sub' }, 'Scan deze QR-code of tik de NFC-tag aan om hier direct te komen.'),
       h('div', { class: 'actions' }, h('a', { class: 'btn sm', href: `#/labels/${t.id}?only=1` }, icon('print'), 'Label printen'))));
   main.append(bannerBox, form, labelCard);
+  // Kleine opslaanknop in de (vaste) bovenbalk, zodat je niet naar onderen hoeft te scrollen.
+  const topSave = h('button', { class: 'btn sm primary', type: 'button', onclick: () => form.requestSubmit() }, isNew ? 'Toevoegen' : 'Opslaan');
+  document.querySelector('.topbar').append(topSave);
   if (isNew) nameI.focus();
   if (isNew && f.barcode && !f.name) lookup(false);
   drawLego();
@@ -708,7 +715,7 @@ async function viewShopping(token) {
   const load = async () => {
     const [r, integ] = await Promise.all([api('GET', '/api/things?shopping=1&sort=name&limit=500'), api('GET', '/api/integrations')]);
     if (stale(token)) return;
-    const main = shell('Boodschappen', { back: '#/', tab: 'home' });
+    const main = shell('Lijst', { back: '#/', tab: 'home' });
     main.append(h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Alles wat bijna op is (aantal ≤ meldgrens) en wat je zelf op de lijst zette. Na "Gekocht" gaat het aantal omhoog en verdwijnt het van de lijst.'));
     if (!r.things.length) { main.append(h('div', { class: 'empty' }, 'Niets nodig. Zet iets op de lijst via een item, of geef items een meldgrens ("Melden bij ≤").')); return; }
     main.append(h('div', { class: 'list' }, r.things.map((t) => {
@@ -1182,7 +1189,7 @@ async function viewMore(token) {
         h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
         h('button', { class: 'btn', onclick: () => boxImportDialog().then((ok) => ok && draw()) }, icon('upload'), 'Dozenlijst importeren'),
         h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
-        h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Boodschappen'),
+        h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Lijst'),
         h('a', { class: 'btn', href: '#/trash' }, icon('trash'), 'Prullenbak'),
         h('a', { class: 'btn', href: '#/duplicates' }, icon('link'), 'Dubbelen opruimen'),
         h('button', { class: 'btn', onclick: () => legoDialog() }, icon('box'), 'Lego-sets aanvullen'),

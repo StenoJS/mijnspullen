@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.8.1
+# Mijn Spullen — 0.8.2
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -28,6 +28,9 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   aangevinkt. Lego-setnummers krijgen naam, thema, tag en foto. Er wordt vooraf een back-up gemaakt.
 - Dozen heten consequent **"Doos 101"** (0.8.1): bestaande "101" en "Box 101" worden eenmalig hernoemd en dubbele
   dozen met hetzelfde nummer op dezelfde plek samengevoegd (back-up vooraf).
+- 0.8.2: **ster** in de bovenbalk toont alleen favorieten (in de huidige plek en alles eronder); bij bewerken staat
+  **Opslaan** ook rechtsboven; Omschrijving staat direct onder Naam; "Boodschappen" heet nu **Lijst**; de tegels op
+  het startscherm passen op een smalle telefoon.
 
 ### Nieuw in 0.7
 
@@ -60,7 +63,7 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   op de boodschappenlijst zetten of verwijderen in één keer.
 - **Uitlenen**: bij een item "Uitgeleend aan" + terugbrengdatum. Badge "Bij …" in lijsten, filter *Uitgeleend*,
   teller op het startscherm, en een Home Assistant-melding (`lend_overdue`) als de datum verstreken is.
-- **Boodschappenlijst** (*Meer → Boodschappen* of de tegel op het startscherm): alles wat bijna op is plus wat je
+- **Boodschappenlijst** (*Meer → Lijst* of de tegel op het startscherm): alles wat bijna op is plus wat je
   zelf op de lijst zet. "Gekocht" hoogt het aantal op. Delen/kopiëren, of naar Home Assistant sturen (event `shopping`).
 - **Dubbelen opruimen** (0.4.1, *Meer → Dubbelen opruimen*): vindt spullen met dezelfde naam op dezelfde plek (en items
   met dezelfde barcode). Kies welke blijft; tags, foto's en lege velden komen mee, containers worden inclusief inhoud

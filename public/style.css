@@ -175,7 +175,14 @@ svg.qr { width: 100%; height: 100%; display: block; }
 /* ---------- 0.4: selecteren, prullenbak, uitlenen, boodschappen ---------- */
 .toast.has-action { display: flex; align-items: center; gap: 12px; pointer-events: auto; }
 .toast-btn { background: transparent; border: 0; color: #5eead4; font-weight: 700; cursor: pointer; padding: 4px 2px; font: inherit; }
-.stats { grid-template-columns: repeat(4, 1fr); }
+.stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stat { padding: 10px 8px; min-width: 0; }
+.stat b { font-size: 1.25rem; }
+.stat span { display: block; font-size: .75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.filter-note { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted); font-size: .9rem; }
+.filter-note svg { width: 18px; height: 18px; flex: none; }
+.filter-note span { flex: 1; min-width: 0; }
+.topbar > .btn.sm { flex: none; }
 .stat.warn b { color: var(--warn); }
 .row .pickbox { width: 24px; height: 24px; border-radius: 7px; border: 2px solid var(--line); display: grid; place-items: center; flex: none; color: transparent; }
 .row.picked { outline: 2px solid var(--accent); background: var(--accent-soft); }
