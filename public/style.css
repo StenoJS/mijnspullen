@@ -126,7 +126,10 @@ dialog::backdrop { background: rgba(5, 15, 14, .55); }
 .userrow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
 .userrow:last-child { border-bottom: 0; }
 .userrow .main { flex: 1; min-width: 0; }
-.act { font-size: .88rem; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.act { font-size: .88rem; padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; }
+.act > div { flex: 1; min-width: 0; }
+.avatar { display: inline-grid; place-items: center; flex: none; border-radius: 50%; color: #fff; font-weight: 600; line-height: 1; object-fit: cover; background: var(--surface-2); user-select: none; }
+.avatar-btn { padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; flex: none; }
 .act small { color: var(--muted); display: block; }
 .ver { color: var(--muted); font-size: .8rem; text-align: center; margin-top: 24px; }
 @media (min-width: 560px) { .stats { gap: 14px; } }

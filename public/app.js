@@ -1173,13 +1173,18 @@ async function viewMore(token) {
     if (stale(token)) return;
     const main = shell('Meer', { tab: 'more' });
     const isAdmin = S.me.role === 'admin';
+    const avatarI = h('input', { type: 'file', accept: 'image/*', style: 'display:none', onchange: (e) => { const f = e.target.files[0]; if (f) setAvatar(f, draw); } });
     main.append(
-      h('div', { class: 'card' }, h('div', { class: 'userrow' }, h('div', { class: 'thumb' }, icon('user')), h('div', { class: 'main' }, h('b', {}, S.me.display_name), h('div', { class: 'sub' }, `@${S.me.username} · ${S.me.role === 'admin' ? 'beheerder' : 'lid'}`))),
+      h('div', { class: 'card' }, h('div', { class: 'userrow' }, h('button', { class: 'avatar-btn', 'aria-label': 'Profielfoto kiezen', title: 'Profielfoto kiezen', onclick: () => avatarI.click() }, avatar(S.me, 56)), h('div', { class: 'main' }, h('b', {}, S.me.display_name), h('div', { class: 'sub' }, `@${S.me.username} · ${S.me.role === 'admin' ? 'beheerder' : 'lid'}`))),
+        avatarI,
         h('div', { class: 'actions', style: 'margin-top:10px' },
+          h('button', { class: 'btn', onclick: () => avatarI.click() }, icon('camera'), S.me.avatar_at ? 'Andere foto' : 'Profielfoto'),
+          S.me.avatar_at && h('button', { class: 'btn', onclick: () => setAvatar(null, draw) }, 'Foto weghalen'),
           h('button', { class: 'btn', onclick: pwDialog }, 'Wachtwoord wijzigen'),
           h('button', { class: 'btn', onclick: async () => { try { await api('POST', '/api/logout'); } catch { /* */ } S.me = null; location.hash = '#/'; renderAuth('login'); } }, icon('logout'), 'Uitloggen'))),
       h('div', { class: 'section-title' }, 'Gebruikers'),
       h('div', { class: 'card' }, users.map((u) => h('div', { class: 'userrow' },
+        avatar(u.id === S.me.id ? { ...u, avatar_at: S.me.avatar_at } : u, 36),
         h('div', { class: 'main' }, h('b', {}, u.display_name, u.disabled ? ' (geblokkeerd)' : ''), h('div', { class: 'sub' }, `@${u.username} · ${u.role === 'admin' ? 'beheerder' : 'lid'}`)),
         isAdmin && u.id !== S.me.id && h('button', { class: 'btn sm', onclick: () => userDialog(u).then((ok) => ok && draw()) }, 'Beheer'))),
       isAdmin && h('div', { class: 'actions', style: 'margin-top:10px' }, h('button', { class: 'btn', onclick: () => userDialog().then((ok) => ok && draw()) }, icon('plus'), 'Gebruiker toevoegen'))),
@@ -1221,7 +1226,7 @@ async function viewMore(token) {
           h('button', { class: 'btn sm danger', onclick: async () => { if (!await confirmDialog(`Token "${tk.name}" intrekken?`, 'Wat dit token gebruikt, werkt daarna niet meer.', 'Intrekken')) return; await api('DELETE', `/api/tokens/${tk.id}`); draw(); } }, 'Intrekken'))),
         h('div', { class: 'actions', style: 'margin-top:8px' }, h('button', { class: 'btn', onclick: () => tokenDialog().then((ok) => ok && draw()) }, icon('key'), 'Nieuw token'))),
       h('div', { class: 'section-title' }, 'Recente activiteit'),
-      h('div', { class: 'card' }, act.activity.length ? act.activity.map((a) => h('div', { class: 'act' }, a.summary, h('small', {}, fmtDate(a.at)))) : 'Nog geen activiteit.'),
+      h('div', { class: 'card' }, act.activity.length ? act.activity.map((a) => h('div', { class: 'act' }, avatar(a.user_id ? a : null, 28), h('div', {}, a.summary, h('small', {}, fmtDate(a.at))))) : 'Nog geen activiteit.'),
       h('div', { class: 'ver' }, `Mijn Spullen ${S.version}`));
   };
   refresh = () => draw().catch(() => {});
@@ -1359,6 +1364,39 @@ function importDialog() {
       h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Sluiten'), h('button', { class: 'btn primary', type: 'button', onclick: () => go(true) }, 'Controleren')));
   });
 }
+// ============ avatars ============
+// Rondje met de eerste letter (vaste kleur per gebruiker), of de eigen foto als die er is.
+function avatar(u, size = 40) {
+  const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px`;
+  if (u && u.avatar_at) return h('img', { class: 'avatar', style, alt: '', src: `/api/avatars/${u.id || u.user_id}?v=${encodeURIComponent(u.avatar_at)}` });
+  const name = (u && (u.display_name || u.user || u.username)) || '?';
+  let hash = 0;
+  for (const ch of String((u && u.username) || name).toLowerCase()) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  return h('span', { class: 'avatar', 'aria-hidden': 'true', style: `${style};background:hsl(${hash % 360} 50% 42%)` }, ([...name.trim()][0] || '?').toUpperCase());
+}
+// Midden uit de foto een vierkant van 256 px snijden.
+async function squareAvatar(file) {
+  const bmp = await createImageBitmap(file).catch(() => null);
+  if (!bmp) throw new Error('Kan deze afbeelding niet lezen');
+  const side = Math.min(bmp.width, bmp.height), out = Math.min(256, side);
+  const c = document.createElement('canvas');
+  c.width = c.height = out;
+  c.getContext('2d').drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, out, out);
+  bmp.close?.();
+  return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('Verkleinen mislukt'))), 'image/jpeg', 0.85));
+}
+async function setAvatar(file, redraw) {
+  try {
+    const blob = file ? await squareAvatar(file) : null;
+    const r = blob
+      ? await fetch('/api/me/avatar', { method: 'PUT', headers: { 'content-type': 'image/jpeg', 'x-requested-with': 'mijn-spullen' }, body: blob }).then(async (x) => { const j = await x.json(); if (!x.ok) throw new Error(j.error || 'Opslaan mislukt'); return j; })
+      : await api('DELETE', '/api/me/avatar');
+    S.me.avatar_at = r.avatar_at;
+    toast(blob ? 'Profielfoto opgeslagen' : 'Profielfoto weggehaald');
+    redraw();
+  } catch (ex) { toast(ex.message, true); }
+}
+
 function pwDialog() {
   return openDialog((close) => {
     const cur = h('input', { type: 'password', autocomplete: 'current-password', required: true });

@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'images'), { recursive: true });
@@ -138,6 +138,10 @@ function migrate(db) {
         deleted_at TEXT NOT NULL
       );
     `);
+  }
+  if (current < 4) {
+    // Profielfoto per gebruiker (bestand images/avatar-<id>.jpg); de tijd dient ook als versie voor de cache.
+    db.exec('ALTER TABLE users ADD COLUMN avatar_at TEXT;');
   }
   db.prepare("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run(String(SCHEMA_VERSION));

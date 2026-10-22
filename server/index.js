@@ -424,7 +424,7 @@ function createUser(b, role) {
 function startSession(res, userId, user) {
   const s = auth.createSession(db, userId);
   res.setHeader('Set-Cookie', auth.cookieHeader(s.token, s.expires, COOKIE_SECURE));
-  return { user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role } };
+  return { user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, avatar_at: avatarAt(user.id) } };
 }
 
 route('POST', '/api/login', PUBLIC, async ({ req, res }) => {
@@ -443,7 +443,31 @@ route('POST', '/api/logout', USER, ({ res, user }) => {
   res.setHeader('Set-Cookie', auth.clearCookie(COOKIE_SECURE));
   return { ok: true };
 });
-route('GET', '/api/me', USER, ({ user }) => ({ user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role }, version: VERSION, ai: ai.configured() }));
+const avatarAt = (id) => (db.prepare('SELECT avatar_at FROM users WHERE id = ?').get(id) || {}).avatar_at || null;
+route('GET', '/api/me', USER, ({ user }) => ({ user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, avatar_at: avatarAt(user.id) }, version: VERSION, ai: ai.configured() }));
+// Profielfoto: de browser maakt er een vierkante JPEG van; zonder foto toont de app een rondje met de eerste letter.
+const avatarFile = (id) => path.join(IMG_DIR, `avatar-${id}.jpg`);
+route('PUT', '/api/me/avatar', USER, async ({ req, user }) => {
+  if (String(req.headers['content-type'] || '').split(';')[0].trim() !== 'image/jpeg') throw new HttpError(415, 'Alleen JPEG');
+  const buf = await readBody(req, 1024 * 1024);
+  if (!buf.length) throw bad('Leeg bestand');
+  fs.writeFileSync(avatarFile(user.id), buf);
+  const at = now();
+  db.prepare('UPDATE users SET avatar_at = ? WHERE id = ?').run(at, user.id);
+  return { avatar_at: at };
+});
+route('DELETE', '/api/me/avatar', USER, ({ user }) => {
+  fs.rmSync(avatarFile(user.id), { force: true });
+  db.prepare('UPDATE users SET avatar_at = NULL WHERE id = ?').run(user.id);
+  return { avatar_at: null };
+});
+route('GET', '/api/avatars/:id', USER, ({ params, res }) => {
+  const file = avatarFile(Number(params.id));
+  if (!fs.existsSync(file)) throw new HttpError(404, 'Geen foto');
+  res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' });
+  fs.createReadStream(file).pipe(res);
+  return res;
+});
 route('POST', '/api/me/password', USER, async ({ req, user }) => {
   if (user._viaToken) throw new HttpError(403, 'Niet beschikbaar met een API-token');
   const b = await readJson(req);
@@ -456,7 +480,7 @@ route('POST', '/api/me/password', USER, async ({ req, user }) => {
 });
 
 // gebruikers (admin)
-route('GET', '/api/users', USER, () => db.prepare('SELECT id, username, display_name, role, disabled, created_at FROM users ORDER BY id').all().map((u) => ({ ...u, disabled: !!u.disabled })));
+route('GET', '/api/users', USER, () => db.prepare('SELECT id, username, display_name, role, disabled, created_at, avatar_at FROM users ORDER BY id').all().map((u) => ({ ...u, disabled: !!u.disabled })));
 route('POST', '/api/users', ADMIN, async ({ req }) => ({ user: createUser(await readJson(req), 'member') }));
 route('PATCH', '/api/users/:id', ADMIN, async ({ req, params, user }) => {
   const id = Number(params.id);
@@ -720,7 +744,7 @@ route('GET', '/api/stats', USER, () => {
   return { stats: { items: s.items || 0, containers: s.containers || 0, total_quantity: s.total_quantity, total_value: s.total_value, low: s.low || 0, expiring: s.expiring || 0, lent: s.lent || 0, shopping: s.shopping || 0 } };
 });
 route('GET', '/api/activity', USER, ({ query }) => ({
-  activity: db.prepare('SELECT a.id, a.action, a.summary, a.at, a.thing_id, u.display_name AS user FROM activity a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT ?')
+  activity: db.prepare('SELECT a.id, a.action, a.summary, a.at, a.thing_id, a.user_id, u.display_name AS user, u.username, u.avatar_at FROM activity a LEFT JOIN users u ON u.id = a.user_id ORDER BY a.id DESC LIMIT ?')
     .all(Math.max(1, Math.min(200, Number(query.limit) || 30))),
 }));
 route('GET', '/api/events', USER, ({ req, res }) => {
