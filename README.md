@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.8.4
+# Mijn Spullen — 0.8.5
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -35,6 +35,8 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   rondje*). Zichtbaar bij Gebruikers en in de activiteit.
 - 0.8.4: lange namen lopen door op een tweede regel in plaats van af te kappen; in een doos of kamer staat de titel
   onder de knoppen in de bovenbalk.
+- 0.8.5: avatars in de activiteit kloppen weer voor elke regel; lange geplakte teksten worden afgebroken en in de
+  activiteit ingekort.
 
 ### Nieuw in 0.7
 

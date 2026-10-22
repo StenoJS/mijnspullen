@@ -1227,7 +1227,7 @@ async function viewMore(token) {
           h('button', { class: 'btn sm danger', onclick: async () => { if (!await confirmDialog(`Token "${tk.name}" intrekken?`, 'Wat dit token gebruikt, werkt daarna niet meer.', 'Intrekken')) return; await api('DELETE', `/api/tokens/${tk.id}`); draw(); } }, 'Intrekken'))),
         h('div', { class: 'actions', style: 'margin-top:8px' }, h('button', { class: 'btn', onclick: () => tokenDialog().then((ok) => ok && draw()) }, icon('key'), 'Nieuw token'))),
       h('div', { class: 'section-title' }, 'Recente activiteit'),
-      h('div', { class: 'card' }, act.activity.length ? act.activity.map((a) => h('div', { class: 'act' }, avatar(a.user_id ? a : null, 28), h('div', {}, a.summary, h('small', {}, fmtDate(a.at))))) : 'Nog geen activiteit.'),
+      h('div', { class: 'card' }, act.activity.length ? act.activity.map((a) => h('div', { class: 'act' }, avatar(a.user_id ? a : null, 28), h('div', {}, a.summary.length > 160 ? `${a.summary.slice(0, 160)}…` : a.summary, h('small', {}, fmtDate(a.at))))) : 'Nog geen activiteit.'),
       h('div', { class: 'ver' }, `Mijn Spullen ${S.version}`));
   };
   refresh = () => draw().catch(() => {});
@@ -1369,7 +1369,7 @@ function importDialog() {
 // Rondje met de eerste letter (vaste kleur per gebruiker), of de eigen foto als die er is.
 function avatar(u, size = 40) {
   const style = `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.45)}px`;
-  if (u && u.avatar_at) return h('img', { class: 'avatar', style, alt: '', src: `/api/avatars/${u.id || u.user_id}?v=${encodeURIComponent(u.avatar_at)}` });
+  if (u && u.avatar_at) return h('img', { class: 'avatar', style, alt: '', src: `/api/avatars/${u.user_id || u.id}?v=${encodeURIComponent(u.avatar_at)}` });
   const name = (u && (u.display_name || u.user || u.username)) || '?';
   let hash = 0;
   for (const ch of String((u && u.username) || name).toLowerCase()) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;

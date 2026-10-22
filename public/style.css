@@ -19,7 +19,7 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-body { min-height: 100dvh; }
+body { min-height: 100dvh; overflow-wrap: anywhere; }  /* lange geplakte teksten breken de layout niet */
 .boot { padding: 40px 16px; color: var(--muted); text-align: center; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--accent); }
@@ -127,7 +127,7 @@ dialog::backdrop { background: rgba(5, 15, 14, .55); }
 .userrow:last-child { border-bottom: 0; }
 .userrow .main { flex: 1; min-width: 0; }
 .act { font-size: .88rem; padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: flex-start; }
-.act > div { flex: 1; min-width: 0; }
+.act > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .avatar { display: inline-grid; place-items: center; flex: none; border-radius: 50%; color: #fff; font-weight: 600; line-height: 1; object-fit: cover; background: var(--surface-2); user-select: none; }
 .avatar-btn { padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; flex: none; }
 .act small { color: var(--muted); display: block; }
