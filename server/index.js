@@ -575,7 +575,7 @@ route('PUT', '/api/integrations/ai', ADMIN, async ({ req, user }) => {
   if ('token' in b) set('ha_token', str(b.token, 1000).replace(/^Bearer\s+/i, ''));
   if ('entity' in b) {
     const e = str(b.entity, 200);
-    if (e && !/^ai_task\.[a-z0-9_]+$/.test(e)) throw bad('Entiteit moet beginnen met ai_task.');
+    if (e && !/^ai_task\.[a-z0-9_]+(\s*,\s*ai_task\.[a-z0-9_]+)*$/.test(e)) throw bad('Gebruik ai_task.… (meerdere mag, met komma\'s)');
     set('ha_ai_entity', e);
   }
   logActivity(user, null, 'settings', `${user.display_name} wijzigde de instellingen voor fotoherkenning`);
@@ -600,7 +600,7 @@ route('POST', '/api/ai/recognize', USER, async ({ req, query }) => {
   }
   const tags = db.prepare('SELECT id, name FROM tags').all();
   let r;
-  try { r = await ai.recognize(buf, mime, tags.map((t) => t.name)); } catch (e) { throw new HttpError(502, e.message); }
+  try { r = await ai.recognize(buf, mime, tags.map((t) => t.name)); } catch (e) { throw new HttpError(e.busy ? 503 : 502, e.message); }
   const byName = new Map(tags.map((t) => [t.name.toLowerCase(), t.id]));
   return { suggestion: { ...r, tag_ids: r.tags.map((n) => byName.get(n.toLowerCase())).filter(Boolean), new_tags: r.tags.filter((n) => !byName.has(n.toLowerCase())) } };
 });

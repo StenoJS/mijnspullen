@@ -545,7 +545,7 @@ async function viewThing(id, q, token) {
     try {
       if (file) r = await api('POST', '/api/ai/recognize', await shrinkImage(file, 1024, 0.8), { 'Content-Type': 'image/jpeg' });
       else r = await api('POST', `/api/ai/recognize?image_id=${images[0].id}`);
-    } catch (ex) { toast(ex.message, true); return; } finally { recognizing = false; photoBox.classList.remove('busy'); }
+    } catch (ex) { toast(ex.message, true, ex.status === 503 ? { label: 'Opnieuw', fn: () => recognize() } : undefined); return; } finally { recognizing = false; photoBox.classList.remove('busy'); }
     const s = r.suggestion;
     if (!f.description && s.description) { f.description = s.description; descI.value = s.description; }
     const addTags = s.tag_ids.filter((x) => !f.tag_ids.includes(x));
@@ -744,7 +744,7 @@ function aiDialog(info) {
     return h('div', { class: 'dlg' }, h('h2', {}, 'Fotoherkenning (AI)'),
       h('p', { class: 'meta', style: 'margin:0' }, 'De app laat foto\'s beoordelen door de AI die in Home Assistant is ingesteld. Maak in Home Assistant onder je profiel → Beveiliging een "langlevend toegangstoken" aan (naam: Mijn Spullen) en plak het hieronder. Het token wordt alleen op de server bewaard.'),
       h('div', { class: 'field' }, h('label', {}, 'Home Assistant-token'), tokenI),
-      h('div', { class: 'field' }, h('label', {}, 'AI-entiteit'), entityI),
+      h('div', { class: 'field' }, h('label', {}, 'AI-entiteit'), entityI, h('small', { class: 'meta' }, 'Meerdere mag, gescheiden door komma\'s: is de eerste overbelast, dan probeert de app de volgende.')),
       err,
       h('div', { class: 'dlg-actions' },
         info.token_set && !info.token_from_env && h('button', { class: 'btn danger', onclick: () => save({ token: '' }) }, 'Uitzetten'),

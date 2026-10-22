@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.5.0
+# Mijn Spullen — 0.5.1
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.

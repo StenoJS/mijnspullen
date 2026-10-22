@@ -7,6 +7,12 @@ const DEFAULT_ENTITY = 'ai_task.google_ai_task';
 let getSetting = () => null;
 const token = () => getSetting('ha_token') || process.env.HA_TOKEN || '';
 const entity = () => getSetting('ha_ai_entity') || process.env.HA_AI_ENTITY || DEFAULT_ENTITY;
+// Meerdere entiteiten mogen (komma-gescheiden): bij drukte wordt de volgende geprobeerd.
+const entities = () => entity().split(',').map((e) => e.trim()).filter(Boolean);
+// Tijdelijke fouten van de AI-dienst (overbelast, quotum): even wachten en opnieuw proberen.
+const isBusy = (msg) => /\b(429|503)\b|overload|high demand|unavailable|resource.?exhausted|rate.?limit|try again|niet op tijd/i.test(msg);
+const RETRY_DELAYS = (process.env.AI_RETRY_DELAYS || '2000,5000').split(',').map(Number).filter((n) => n >= 0);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const configured = () => !!(HA_URL && token());
 
 async function haFetch(pathname, opts = {}, timeoutMs = 60000) {
@@ -58,14 +64,31 @@ async function recognize(buf, mime, tagNames) {
       'Antwoord in het Nederlands. Verzin niets wat je niet ziet.',
       tagNames.length ? `Kies tags bij voorkeur uit deze bestaande tags: ${tagNames.slice(0, 80).join(', ')}. Alleen een nieuwe tag als er echt niets past.` : '',
     ].filter(Boolean).join('\n');
-    const r = await haFetch('/api/services/ai_task/generate_data?return_response', {
+    const ask = (entityId) => haFetch('/api/services/ai_task/generate_data?return_response', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        entity_id: entity(), task_name: 'Mijn Spullen fotoherkenning', instructions, structure: STRUCTURE,
+        entity_id: entityId, task_name: 'Mijn Spullen fotoherkenning', instructions, structure: STRUCTURE,
         attachments: [{ media_content_id: `media-source://image_upload/${up.id}`, media_content_type: mime }],
       }),
     });
+    let r = null, last = null;
+    for (const entityId of entities()) {
+      for (let attempt = 0; attempt <= RETRY_DELAYS.length && !r; attempt++) {
+        if (attempt) await sleep(RETRY_DELAYS[attempt - 1]);
+        try { r = await ask(entityId); } catch (e) {
+          last = e;
+          if (!isBusy(e.message)) throw e; // echte fout (token, entiteit): niet blijven proberen
+          console.warn(`AI-taak ${entityId} druk (poging ${attempt + 1}): ${e.message.slice(0, 120)}`);
+        }
+      }
+      if (r) break;
+    }
+    if (!r) {
+      const err = new Error('De AI-dienst (Google) is nu overbelast. Probeer het over een minuut opnieuw.');
+      err.busy = true; err.detail = last && last.message;
+      throw err;
+    }
     const d = (r && r.service_response && r.service_response.data) || {};
     if (!d.name) throw new Error('De AI herkende niets op deze foto');
     return {
@@ -81,8 +104,12 @@ async function recognize(buf, mime, tagNames) {
 // Controle van token + entiteit zonder foto: bestaat de AI-entiteit en mag het token erbij?
 async function check() {
   if (!configured()) throw new Error('Geen token ingesteld');
-  const st = await haFetch(`/api/states/${encodeURIComponent(entity())}`, {}, 10000);
-  return { entity: entity(), name: (st.attributes && st.attributes.friendly_name) || entity() };
+  const names = [];
+  for (const e of entities()) {
+    const st = await haFetch(`/api/states/${encodeURIComponent(e)}`, {}, 10000);
+    names.push((st.attributes && st.attributes.friendly_name) || e);
+  }
+  return { entity: entity(), name: names.join(' + ') };
 }
 
 module.exports = {
