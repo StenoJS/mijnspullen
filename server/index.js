@@ -568,6 +568,14 @@ function storeImage(user, thingId, buf, mime, req) {
   changed(user, 'thing', thingId, req);
   return { id, mime, has_thumb: 0 };
 }
+// Foto van een open doos/la: container + lijst met wat erin zit (nog niets opgeslagen).
+route('POST', '/api/ai/contents', USER, async ({ req }) => {
+  const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
+  if (!IMAGE_TYPES[mime]) throw new HttpError(415, 'Alleen JPEG, PNG of WebP');
+  const buf = await readBody(req, MAX_IMAGE);
+  if (!buf.length) throw bad('Leeg bestand');
+  try { return await ai.recognizeContents(buf, mime); } catch (e) { throw new HttpError(e.busy ? 503 : 502, e.message); }
+});
 route('GET', '/api/integrations/ai', ADMIN, () => ai.info());
 route('PUT', '/api/integrations/ai', ADMIN, async ({ req, user }) => {
   const b = await readJson(req);

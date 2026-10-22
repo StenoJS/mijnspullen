@@ -256,12 +256,17 @@ function addDialog(parent) {
       const file = e.target.files[0]; if (!file) return;
       S.aiFile = file; close(); location.hash = `#/new?container=0${p}&ai=1`;
     } });
+    const boxI = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: 'display:none', onchange: (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      close(); contentsDialog(file, parent);
+    } });
     return h('div', { class: 'dlg' }, h('h2', {}, 'Toevoegen'),
       h('a', { class: 'btn primary', href: `#/new?container=0${p}`, onclick: () => close() }, icon('box'), 'Nieuw item'),
       h('a', { class: 'btn', href: `#/new?container=1${p}`, onclick: () => close() }, icon('folder'), 'Nieuwe container (kamer, kast, doos…)'),
       S.ai && h('button', { class: 'btn', onclick: () => aiI.click() }, icon('sparkle'), 'Foto maken, AI vult in'),
+      S.ai && h('button', { class: 'btn', onclick: () => boxI.click() }, icon('folder'), 'Foto van een open doos of la (AI)'),
       h('button', { class: 'btn', onclick: () => { close(); serialScan(parent); } }, icon('scan'), 'Scannen in serie (meerdere producten)'),
-      aiI,
+      aiI, boxI,
       h('button', { class: 'btn ghost', onclick: () => close() }, 'Annuleren'));
   });
 }
@@ -725,6 +730,80 @@ async function viewTrash(token) {
   };
   refresh = () => load().catch(() => {});
   await load();
+}
+
+// ============ doos fotograferen: container + inhoud ============
+// AI stelt een naam voor de doos en een lijst met wat erin zit voor; jij vinkt af en past aan, daarna pas opslaan.
+async function contentsDialog(file, parentId) {
+  let parentName = null;
+  if (parentId) { const p = await api('GET', `/api/things/${parentId}`).catch(() => null); if (p && p.thing.is_container) parentName = p.thing.name; else parentId = null; }
+  let saved = null;
+  await openDialog((close) => {
+    const body = h('div', { class: 'dlg-scroll' });
+    const actions = h('div', { class: 'dlg-actions' });
+    const preview = h('img', { class: 'box-preview', src: URL.createObjectURL(file), alt: '' });
+    let rows = [];
+    const run = async () => {
+      body.replaceChildren(preview, h('p', { class: 'nfc-wait' }, icon('sparkle'), 'De AI bekijkt de foto… (kan even duren)'));
+      actions.replaceChildren(h('button', { class: 'btn', onclick: () => close() }, 'Annuleren'));
+      let r;
+      try { r = await api('POST', '/api/ai/contents', await shrinkImage(file, 1600, 0.85), { 'Content-Type': 'image/jpeg' }); }
+      catch (ex) {
+        body.replaceChildren(preview, h('div', { class: 'error' }, ex.message));
+        actions.replaceChildren(h('button', { class: 'btn', onclick: () => close() }, 'Annuleren'), h('button', { class: 'btn primary', onclick: () => run() }, 'Opnieuw'));
+        return;
+      }
+      draw(r);
+    };
+    const draw = (r) => {
+      // Waar komt het in: een nieuwe container (in de huidige), of direct in de huidige container.
+      let mode = 'new';
+      const nameI = h('input', { value: r.container.name, maxlength: 200, 'aria-label': 'Naam van de container' });
+      const descI = h('input', { value: r.container.description, maxlength: 2000, placeholder: 'optioneel', 'aria-label': 'Omschrijving' });
+      const newBox = h('div', {}, h('div', { class: 'field' }, h('label', {}, 'Naam van de doos / la'), nameI), h('div', { class: 'field' }, h('label', {}, 'Omschrijving'), descI),
+        h('p', { class: 'meta', style: 'margin:0' }, `Komt in: ${parentName || 'Hoofdniveau'}`));
+      const modeSeg = parentName && h('div', { class: 'seg' }, ...[['new', 'Nieuwe container'], ['here', `Direct in ${parentName}`]].map(([k, lbl], i) =>
+        h('button', { type: 'button', class: i === 0 ? 'on' : '', onclick: (e) => { mode = k; [...e.target.parentElement.children].forEach((b) => b.classList.toggle('on', b === e.target)); newBox.style.display = k === 'new' ? '' : 'none'; } }, lbl)));
+      const list = h('div', { class: 'box-items' });
+      const addRow = (it) => {
+        const row = { on: h('input', { type: 'checkbox', checked: true, 'aria-label': 'Meenemen', onchange: () => count() }), name: h('input', { value: it.name, maxlength: 200, 'aria-label': 'Naam' }), qty: h('input', { type: 'number', min: '0', step: 'any', inputmode: 'decimal', value: it.quantity, 'aria-label': 'Aantal' }), desc: it.description || '' };
+        rows.push(row);
+        list.append(h('div', { class: 'box-item' }, row.on, row.name, row.qty));
+      };
+      rows = []; r.items.forEach(addRow);
+      const saveBtn = h('button', { class: 'btn primary', onclick: () => save() });
+      const count = () => { const n = rows.filter((x) => x.on.checked && x.name.value.trim()).length; saveBtn.textContent = `${n} ${n === 1 ? 'ding' : 'spullen'} opslaan`; saveBtn.disabled = !n; };
+      list.addEventListener('input', count);
+      const save = async () => {
+        saveBtn.disabled = true;
+        try {
+          let target = parentId || null;
+          if (mode === 'new') {
+            const c = (await api('POST', '/api/things', { name: nameI.value.trim() || 'Doos', description: descI.value.trim(), is_container: true, parent_id: parentId || null })).thing;
+            target = c.id;
+            await uploadPhoto(c.id, file).catch(() => {});
+          }
+          let n = 0;
+          for (const x of rows) {
+            if (!x.on.checked || !x.name.value.trim()) continue;
+            await api('POST', '/api/things', { name: x.name.value.trim(), quantity: Number(x.qty.value) || 1, description: x.desc, parent_id: target });
+            n++;
+          }
+          saved = { target, n };
+          close();
+        } catch (ex) { toast(ex.message, true); saveBtn.disabled = false; }
+      };
+      body.replaceChildren(preview, modeSeg, newBox,
+        h('div', { class: 'section-sub' }, `Gevonden: ${r.items.length}. Vink uit wat niet klopt en pas namen of aantallen aan.`),
+        list,
+        h('button', { type: 'button', class: 'btn sm', onclick: () => { addRow({ name: '', quantity: 1 }); rows[rows.length - 1].name.focus(); count(); } }, icon('plus'), 'Regel toevoegen'));
+      actions.replaceChildren(h('button', { class: 'btn', onclick: () => close() }, 'Annuleren'), saveBtn);
+      count();
+    };
+    run();
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Doos met inhoud'), body, actions);
+  });
+  if (saved) { toast(`${saved.n} spullen opgeslagen`); if (saved.target) location.hash = `#/c/${saved.target}`; else refresh?.(); }
 }
 
 // ============ fotoherkenning instellen ============

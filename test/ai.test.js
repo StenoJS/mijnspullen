@@ -16,7 +16,8 @@ const ha = http.createServer((req, res) => {
     res.setHeader('content-type', 'application/json');
     if (req.url === '/api/image/upload') return res.end(JSON.stringify({ id: 'abc123', name: 'x.jpg' }));
     if (req.url.startsWith('/api/services/ai_task/generate_data')) {
-      const ent = JSON.parse(body).entity_id;
+      const req2 = JSON.parse(body); const ent = req2.entity_id;
+      if (req2.structure.items) return res.end(JSON.stringify({ service_response: { data: { container_name: 'Doos kabels', container_description: 'Grijze kartonnen doos.', items: '2 | USB-C kabel | zwart\n- 3x AA-batterijen\nSchaar' } } }));
       if (ent === 'ai_task.druk') { res.statusCode = 500; return res.end('Error: 503 UNAVAILABLE. This model is currently experiencing high demand.'); }
       if (ent === 'ai_task.kapot') { res.statusCode = 400; return res.end('Entity not found'); }
       return res.end(JSON.stringify({ changed_states: [], service_response: { conversation_id: 'c', data: { name: 'Bosch accuboormachine', description: 'Groene accuboor met koffer.', tags: 'gereedschap, Elektrisch', quantity: 1, is_container: false } } }));
@@ -63,6 +64,12 @@ test('AI-fotoherkenning via Home Assistant', async () => {
   assert.equal(gen.entity_id, 'ai_task.google_ai_task');
   assert.equal(gen.attachments[0].media_content_id, 'media-source://image_upload/abc123');
   assert.match(gen.instructions, /Gereedschap/);
+
+  // Foto van een open doos: container + inhoud
+  const c = await a('POST', '/api/ai/contents', jpg, { 'content-type': 'image/jpeg' });
+  assert.equal(c.status, 200);
+  assert.equal(c.body.container.name, 'Doos kabels');
+  assert.deepEqual(c.body.items.map((i) => [i.quantity, i.name]), [[2, 'USB-C kabel'], [3, 'AA-batterijen'], [1, 'Schaar']]);
 
   // Met een opgeslagen foto
   const t = (await a('POST', '/api/things', { name: 'Ding' })).body.thing;

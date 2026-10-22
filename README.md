@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.5.1
+# Mijn Spullen — 0.6.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,14 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.6
+
+- **Doos met inhoud fotograferen** (*Toevoegen → Foto van een open doos of la (AI)*): de AI stelt een naam voor de
+  doos en een lijst met alles wat erin zit voor. Vink af wat niet klopt, pas namen/aantallen aan en sla op: de
+  container (met de foto) en de items worden in één keer aangemaakt. Vanuit een container kun je ook kiezen om de
+  spullen direct daarin te zetten.
+- Fotoherkenning probeert het bij drukte bij Google zelf opnieuw en kan uitwijken naar een tweede AI-taak (0.5.1).
 
 ### Nieuw in 0.5
 

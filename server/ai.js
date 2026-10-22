@@ -52,29 +52,38 @@ const STRUCTURE = {
   is_container: { description: 'true als de foto vooral een opbergplek toont (kast, doos, lade, plank, kamer) in plaats van een los voorwerp.', selector: { boolean: {} } },
 };
 
-async function recognize(buf, mime, tagNames) {
+const CONTENTS_STRUCTURE = {
+  container_name: { description: 'Korte Nederlandse naam voor de opbergplek zelf (bijv. "Doos kabels", "Gereedschapskist", "La keukenkast").', required: true, selector: { text: {} } },
+  container_description: { description: 'Eén korte zin over de opbergplek (kleur, materiaal, formaat).', selector: { text: {} } },
+  items: { description: 'Alle afzonderlijke spullen die je erin ziet, één per regel, als "aantal | naam | korte omschrijving". Naam 1 tot 5 woorden, merk en type als zichtbaar. Gelijke dingen samen op één regel met het aantal. Maximaal 40 regels.', required: true, selector: { text: { multiline: true } } },
+};
+
+const instructionsFor = (lines, tagNames) => [
+  ...lines,
+  'Antwoord in het Nederlands. Verzin niets wat je niet ziet.',
+  tagNames.length ? `Kies tags bij voorkeur uit deze bestaande tags: ${tagNames.slice(0, 80).join(', ')}. Alleen een nieuwe tag als er echt niets past.` : '',
+].filter(Boolean).join('\n');
+
+// Foto naar HA, AI-taak uitvoeren (met opnieuw proberen en uitwijken bij drukte), foto weer opruimen.
+async function runTask(buf, mime, instructions, structure) {
   if (!configured()) throw new Error('Fotoherkenning is niet ingesteld: voeg een Home Assistant-token toe onder Meer → Koppelingen');
   const form = new FormData();
   form.append('file', new Blob([buf], { type: mime }), `mijn-spullen.${mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg'}`);
   const up = await haFetch('/api/image/upload', { method: 'POST', body: form }, 30000);
   if (!up || !up.id) throw new Error('Uploaden naar Home Assistant mislukt');
   try {
-    const instructions = [
-      'Je helpt bij een huishoudelijke inventaris-app. Bekijk de foto en beschrijf het belangrijkste voorwerp.',
-      'Antwoord in het Nederlands. Verzin niets wat je niet ziet.',
-      tagNames.length ? `Kies tags bij voorkeur uit deze bestaande tags: ${tagNames.slice(0, 80).join(', ')}. Alleen een nieuwe tag als er echt niets past.` : '',
-    ].filter(Boolean).join('\n');
     const ask = (entityId) => haFetch('/api/services/ai_task/generate_data?return_response', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        entity_id: entityId, task_name: 'Mijn Spullen fotoherkenning', instructions, structure: STRUCTURE,
+        entity_id: entityId, task_name: 'Mijn Spullen fotoherkenning', instructions, structure,
         attachments: [{ media_content_id: `media-source://image_upload/${up.id}`, media_content_type: mime }],
       }),
-    });
+    }, 90000);
     let r = null, last = null;
+    const deadline = Date.now() + 150000; // nooit langer dan ~2,5 minuut laten wachten
     for (const entityId of entities()) {
-      for (let attempt = 0; attempt <= RETRY_DELAYS.length && !r; attempt++) {
+      for (let attempt = 0; attempt <= RETRY_DELAYS.length && !r && Date.now() < deadline; attempt++) {
         if (attempt) await sleep(RETRY_DELAYS[attempt - 1]);
         try { r = await ask(entityId); } catch (e) {
           last = e;
@@ -89,16 +98,54 @@ async function recognize(buf, mime, tagNames) {
       err.busy = true; err.detail = last && last.message;
       throw err;
     }
-    const d = (r && r.service_response && r.service_response.data) || {};
-    if (!d.name) throw new Error('De AI herkende niets op deze foto');
-    return {
-      name: String(d.name).trim().slice(0, 200),
-      description: String(d.description || '').trim().slice(0, 2000),
-      tags: String(d.tags || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 5),
-      quantity: Number(d.quantity) > 0 ? Math.round(Number(d.quantity)) : 1,
-      is_container: d.is_container === true || d.is_container === 'true',
-    };
+    return (r.service_response && r.service_response.data) || {};
   } finally { deleteUpload(up.id); }
+}
+
+const splitTags = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean).slice(0, 5);
+
+async function recognize(buf, mime, tagNames) {
+  const d = await runTask(buf, mime, instructionsFor(['Je helpt bij een huishoudelijke inventaris-app. Bekijk de foto en beschrijf het belangrijkste voorwerp.'], tagNames), STRUCTURE);
+  if (!d.name) throw new Error('De AI herkende niets op deze foto');
+  return {
+    name: String(d.name).trim().slice(0, 200),
+    description: String(d.description || '').trim().slice(0, 2000),
+    tags: splitTags(d.tags),
+    quantity: Number(d.quantity) > 0 ? Math.round(Number(d.quantity)) : 1,
+    is_container: d.is_container === true || d.is_container === 'true',
+  };
+}
+
+// Regels "aantal | naam | omschrijving" (ook "3x naam" of alleen "naam") omzetten naar items.
+function parseItems(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim();
+    if (!line) continue;
+    let [a, b, c] = line.split('|').map((x) => x.trim());
+    let qty = 1, name, desc = '';
+    if (b !== undefined && /^\d+([.,]\d+)?\s*x?$/i.test(a)) { qty = Number(a.replace(/x$/i, '').replace(',', '.')); name = b; desc = c || ''; }
+    else if (b !== undefined) { name = a; desc = b; }
+    else { const m = a.match(/^(\d+)\s*(?:x|×|stuks?)?\s+(.+)$/i); if (m) { qty = Number(m[1]); name = m[2]; } else name = a; }
+    name = (name || '').replace(/^["']|["']$/g, '').trim().slice(0, 200);
+    if (!name) continue;
+    out.push({ name, quantity: qty > 0 && qty < 10000 ? qty : 1, description: desc.slice(0, 500) });
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+
+async function recognizeContents(buf, mime) {
+  const d = await runTask(buf, mime, instructionsFor([
+    'Je helpt bij een huishoudelijke inventaris-app. De foto toont een open doos, la, kast of andere opbergplek.',
+    'Geef een naam voor de opbergplek en maak een lijst van alle losse spullen die erin liggen of staan.',
+  ], []), CONTENTS_STRUCTURE);
+  const items = parseItems(d.items);
+  if (!items.length) throw new Error('De AI zag geen losse spullen op deze foto');
+  return {
+    container: { name: String(d.container_name || 'Doos').trim().slice(0, 200), description: String(d.container_description || '').trim().slice(0, 2000) },
+    items,
+  };
 }
 
 // Controle van token + entiteit zonder foto: bestaat de AI-entiteit en mag het token erbij?
@@ -113,7 +160,7 @@ async function check() {
 }
 
 module.exports = {
-  recognize, check, configured,
+  recognize, recognizeContents, parseItems, check, configured,
   init: (fn) => { getSetting = fn; },
   info: () => ({ configured: configured(), ha_url: HA_URL || null, entity: entity(), token_set: !!token(), token_from_env: !getSetting('ha_token') && !!process.env.HA_TOKEN }),
 };
