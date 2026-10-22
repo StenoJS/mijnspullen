@@ -211,3 +211,9 @@ svg.qr { width: 100%; height: 100%; display: block; }
 .box-item { display: grid; grid-template-columns: 22px minmax(0, 1fr) 64px; gap: 8px; align-items: center; }
 .box-item input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 .box-item input:not([type=checkbox]) { min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; }
+.lego-btn { margin-top: 6px; }
+.lego-row { display: grid; grid-template-columns: 22px 48px minmax(0, 1fr); gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.lego-row input { width: 20px; height: 20px; accent-color: var(--accent); }
+.lego-row img, .lego-row .thumb { width: 48px; height: 48px; object-fit: contain; border-radius: 8px; background: #fff; }
+.lego-row .main { min-width: 0; }
+.lego-row .sub { color: var(--muted); font-size: .84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

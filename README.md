@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.6.0
+# Mijn Spullen — 0.7.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,13 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.7
+
+- **Lego-sets op nummer**: typ een setnummer als naam (bijv. `31077` of `Lego 60050`) en tik "Lego-set opzoeken": naam,
+  omschrijving (thema, jaar, aantal onderdelen), de tag Lego en een foto worden ingevuld. *Meer → Lego-sets aanvullen* doet
+  dit in één keer voor alle bestaande spullen met alleen een nummer als naam. Bron: de gratis database-download van
+  [Rebrickable](https://rebrickable.com) (geen account nodig), maandelijks ververst in `/data/lego`.
 
 ### Nieuw in 0.6
 

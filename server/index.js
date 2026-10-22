@@ -9,6 +9,7 @@ const { lookupBarcode, fetchImage } = require('./lookup');
 const { writeTar } = require('./tar');
 const { createJobs } = require('./jobs');
 const ai = require('./ai');
+const { createLego } = require('./lego');
 const fms = require('./fms');
 
 const VERSION = require('../package.json').version;
@@ -23,6 +24,9 @@ const MAX_IMAGES_PER_THING = 10;
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 
 const db = openDb(DATA_DIR);
+const lego = createLego(DATA_DIR);
+// Lego-database alvast op de achtergrond laden (en in de log laten zien of dat lukt).
+if (require.main === module) setTimeout(() => lego.load().then(() => console.log('Lego-database geladen')).catch((e) => console.warn(e.message)), 15000).unref();
 ai.init((key) => { const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(key); return r ? r.value : null; });
 const IMG_DIR = path.join(DATA_DIR, 'images');
 const jobs = createJobs(db, DATA_DIR);
@@ -568,6 +572,53 @@ function storeImage(user, thingId, buf, mime, req) {
   changed(user, 'thing', thingId, req);
   return { id, mime, has_thumb: 0 };
 }
+// ---------- Lego-sets (Rebrickable-database) ----------
+const LEGO_NAME = /^\s*(?:lego\s*)?#?\s*(\d{3,7}(?:-\d{1,2})?)\s*$/i;
+const legoLookup = async (code) => { try { return await lego.lookup(code); } catch (e) { throw new HttpError(502, e.message); } };
+route('GET', '/api/lego/:code', USER, async ({ params }) => {
+  const set = await legoLookup(params.code);
+  if (!set) throw new HttpError(404, `Geen Lego-set ${params.code} gevonden`);
+  return { set };
+});
+// Bestaande spullen met alleen een setnummer als naam (bijv. "31077" of "Lego 60050").
+route('GET', '/api/lego-candidates', USER, async () => {
+  const rows = db.prepare('SELECT * FROM things ORDER BY name COLLATE NOCASE').all().filter((t) => LEGO_NAME.test(t.name));
+  const map = allNames();
+  const out = [];
+  for (const t of rows) {
+    const set = await legoLookup(t.name.match(LEGO_NAME)[1]);
+    out.push({ id: t.id, name: t.name, is_container: !!t.is_container, path: pathOf(map, t.id).slice(0, -1), has_image: !!db.prepare('SELECT 1 FROM images WHERE thing_id = ?').get(t.id), set });
+  }
+  return { candidates: out };
+});
+function legoTagId() {
+  const t = db.prepare("SELECT id FROM tags WHERE lower(name) = 'lego'").get();
+  return t ? t.id : Number(db.prepare("INSERT INTO tags(name, color) VALUES('Lego', '#e53935')").run().lastInsertRowid);
+}
+route('POST', '/api/lego-apply', USER, async ({ req, user }) => {
+  const b = await readJson(req);
+  const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(Number).filter(Number.isInteger))].slice(0, 500);
+  const tag = legoTagId();
+  let updated = 0, photos = 0;
+  for (const id of ids) {
+    const t = db.prepare('SELECT * FROM things WHERE id = ?').get(id);
+    const m = t && t.name.match(LEGO_NAME);
+    if (!m) continue;
+    const set = await legoLookup(m[1]);
+    if (!set) continue;
+    db.prepare('UPDATE things SET name = ?, description = CASE WHEN description = \'\' THEN ? ELSE description END, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?')
+      .run(`${set.number} ${set.name}`.slice(0, 200), set.description, user.id, now(), id);
+    db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) VALUES(?, ?)').run(id, tag);
+    updated++;
+    if (set.image_url && !db.prepare('SELECT 1 FROM images WHERE thing_id = ?').get(id)) {
+      const img = await fetchImage(set.image_url, MAX_IMAGE);
+      if (img) { storeImage(user, id, img.buf, img.mime, req); photos++; }
+    }
+  }
+  if (updated) logActivity(user, null, 'lego', `${user.display_name} vulde ${updated} Lego-sets aan uit Rebrickable`);
+  changed(user, 'thing', null, req);
+  return { updated, photos, tag_id: tag };
+});
 // Foto van een open doos/la: container + lijst met wat erin zit (nog niets opgeslagen).
 route('POST', '/api/ai/contents', USER, async ({ req }) => {
   const mime = String(req.headers['content-type'] || '').split(';')[0].trim();
@@ -1094,7 +1145,7 @@ const SEC_HEADERS = {
   'X-Frame-Options': 'DENY',
   'Referrer-Policy': 'same-origin',
   'Permissions-Policy': 'camera=(self), geolocation=(), microphone=()',
-  'Content-Security-Policy': "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'self'; img-src 'self' blob: data: https://cdn.rebrickable.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'",
 };
 
 const server = http.createServer(async (req, res) => {

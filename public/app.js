@@ -476,6 +476,32 @@ async function viewThing(id, q, token) {
     if (r.id) { const p = await api('GET', `/api/things/${r.id}`); f.path = [...p.thing.path, { id: p.thing.id, name: p.thing.name }]; } else f.path = [];
     drawLoc();
   } });
+  // Naam is een Lego-setnummer (bijv. 31077 of "Lego 60050")? Dan naam, omschrijving, tag en foto laten invullen.
+  const LEGO_RE = /^\s*(?:lego\s*)?#?\s*(\d{3,7}(?:-\d{1,2})?)\s*$/i;
+  const legoHint = h('div');
+  const drawLego = () => {
+    const m = String(f.name || '').match(LEGO_RE);
+    legoHint.replaceChildren(...flat(m && h('button', { type: 'button', class: 'btn sm lego-btn', onclick: () => fillLego(m[1]) }, icon('box'), `Lego-set ${m[1]} opzoeken`)));
+  };
+  nameI.addEventListener('input', drawLego);
+  const fillLego = async (num) => {
+    try {
+      const { set } = await api('GET', `/api/lego/${encodeURIComponent(num)}`);
+      f.name = `${set.number} ${set.name}`; nameI.value = f.name;
+      if (!f.description) { f.description = set.description; descI.value = set.description; }
+      let tag = S.tags.find((x) => x.name.toLowerCase() === 'lego');
+      if (!tag) { await api('POST', '/api/tags', { name: 'Lego', color: '#e53935' }); await loadTags(); tag = S.tags.find((x) => x.name.toLowerCase() === 'lego'); }
+      if (tag && !f.tag_ids.includes(tag.id)) f.tag_ids = [...f.tag_ids, tag.id];
+      drawTags();
+      if (set.image_url && !images.length && !pending.length) {
+        if (isNew) pendingImageUrl = set.image_url;
+        else { try { images.push((await api('POST', `/api/things/${id}/images/import`, { url: set.image_url })).image); } catch { /* geen foto */ } }
+        drawPhotos();
+      }
+      dirty = true; drawLego();
+      toast(`${set.name} (${set.year}, ${set.pieces} onderdelen)`);
+    } catch (ex) { toast(ex.message, true); }
+  };
   const drawLoc = () => locBtn.replaceChildren(icon('move'), f.path.length ? f.path.map((p) => p.name).join(' › ') : 'Hoofdniveau');
   drawLoc();
 
@@ -632,7 +658,7 @@ async function viewThing(id, q, token) {
 
   const form = h('form', { class: 'card', onsubmit: save },
     typeSeg,
-    h('div', { class: 'field' }, h('label', {}, 'Naam'), nameI),
+    h('div', { class: 'field' }, h('label', {}, 'Naam'), nameI, legoHint),
     h('div', { class: 'field' }, h('span', { class: 'label' }, 'Locatie'), locBtn),
     h('div', { class: 'grid2' }, qtyF, minF),
     h('div', { class: 'field' }, h('label', {}, "Foto's"), photoBox, fileI, camI),
@@ -663,6 +689,7 @@ async function viewThing(id, q, token) {
   main.append(bannerBox, form, labelCard);
   if (isNew) nameI.focus();
   if (isNew && f.barcode && !f.name) lookup(false);
+  drawLego();
   if (isNew && q.ai && S.aiFile) { pending.push(S.aiFile); S.aiFile = null; drawPhotos(); recognize(); }
 
   // live: iemand anders wijzigde dit item
@@ -804,6 +831,40 @@ async function contentsDialog(file, parentId) {
     return h('div', { class: 'dlg' }, h('h2', {}, 'Doos met inhoud'), body, actions);
   });
   if (saved) { toast(`${saved.n} spullen opgeslagen`); if (saved.target) location.hash = `#/c/${saved.target}`; else refresh?.(); }
+}
+
+// ============ Lego-sets aanvullen ============
+// Spullen die alleen een setnummer als naam hebben: naam, omschrijving, tag Lego en foto uit Rebrickable.
+function legoDialog() {
+  return openDialog((close) => {
+    const body = h('div', { class: 'dlg-scroll' }, h('p', { class: 'nfc-wait' }, icon('box'), 'Lego-database laden…'));
+    const actions = h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(false) }, 'Sluiten'));
+    (async () => {
+      let r;
+      try { r = await api('GET', '/api/lego-candidates'); } catch (ex) { body.replaceChildren(h('div', { class: 'error' }, ex.message)); return; }
+      const found = r.candidates.filter((c) => c.set);
+      if (!found.length) { body.replaceChildren(h('p', { class: 'meta' }, r.candidates.length ? `${r.candidates.length} spullen met een nummer als naam, maar geen bekende Lego-sets.` : 'Geen spullen gevonden met alleen een setnummer als naam (bijv. "31077").')); return; }
+      const boxes = new Map();
+      const btn = h('button', { class: 'btn primary', onclick: async () => {
+        const ids = [...boxes].filter(([, cb]) => cb.checked).map(([id]) => id);
+        if (!ids.length) return;
+        btn.disabled = true; btn.textContent = 'Bezig (foto\'s ophalen)…';
+        try { const x = await api('POST', '/api/lego-apply', { ids }); await loadTags(); toast(`${x.updated} sets aangevuld, ${x.photos} foto's`); close(true); }
+        catch (ex) { toast(ex.message, true); btn.disabled = false; }
+      } }, `${found.length} ${found.length === 1 ? 'set' : 'sets'} aanvullen`);
+      body.replaceChildren(
+        h('p', { class: 'meta', style: 'margin:0 0 8px' }, 'Naam, omschrijving (thema, jaar, onderdelen), de tag Lego en een foto (als er nog geen is) komen uit de Rebrickable-database.'),
+        h('div', { class: 'box-items' }, r.candidates.map((c) => {
+          const cb = h('input', { type: 'checkbox', checked: !!c.set, disabled: !c.set, onchange: () => { const n = [...boxes.values()].filter((x) => x.checked).length; btn.textContent = `${n} ${n === 1 ? 'set' : 'sets'} aanvullen`; btn.disabled = !n; } });
+          if (c.set) boxes.set(c.id, cb);
+          return h('label', { class: 'lego-row' }, cb,
+            c.set && c.set.image_url ? h('img', { src: c.set.image_url, alt: '', loading: 'lazy', referrerpolicy: 'no-referrer' }) : h('div', { class: 'thumb' }, icon('box')),
+            h('div', { class: 'main' }, h('b', {}, c.set ? `${c.set.number} ${c.set.name}` : c.name), h('div', { class: 'sub' }, c.set ? `${c.set.year} · ${c.set.theme} · nu: "${c.name}"` : 'Niet gevonden in de Lego-database')));
+        })));
+      actions.replaceChildren(h('button', { class: 'btn', onclick: () => close(false) }, 'Annuleren'), btn);
+    })();
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Lego-sets aanvullen'), body, actions);
+  });
 }
 
 // ============ fotoherkenning instellen ============
@@ -1064,6 +1125,7 @@ async function viewMore(token) {
         h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Boodschappen'),
         h('a', { class: 'btn', href: '#/trash' }, icon('trash'), 'Prullenbak'),
         h('a', { class: 'btn', href: '#/duplicates' }, icon('link'), 'Dubbelen opruimen'),
+        h('button', { class: 'btn', onclick: () => legoDialog() }, icon('box'), 'Lego-sets aanvullen'),
         isAdmin && h('button', { class: 'btn', onclick: () => fmsDialog().then((ok) => ok && draw()) }, icon('upload'), 'Find my stuff importeren'))),
       isAdmin && h('div', { class: 'section-title' }, 'Opnieuw beginnen'),
       isAdmin && h('div', { class: 'card' },

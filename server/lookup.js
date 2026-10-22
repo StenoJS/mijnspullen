@@ -7,7 +7,7 @@ const SOURCES = [
   'https://world.openbeautyfacts.org',
   'https://world.openproductsfacts.org',
 ];
-const IMAGE_HOSTS = /^(images|static)\.open(food|beauty|products|petfood)facts\.org$/;
+const IMAGE_HOSTS = /^((images|static)\.open(food|beauty|products|petfood)facts\.org|cdn\.rebrickable\.com)$/;
 const UA = 'MijnSpullen/0.2 (self-hosted inventory; https://github.com/StenoJS/mijnspullen)';
 const cache = new Map();
 
