@@ -26,7 +26,7 @@ const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'we
 const db = openDb(DATA_DIR);
 const lego = createLego(DATA_DIR);
 // Lego-database alvast op de achtergrond laden (en in de log laten zien of dat lukt).
-if (require.main === module) setTimeout(() => lego.load().then(() => console.log('Lego-database geladen')).catch((e) => console.warn(e.message)), 15000).unref();
+if (require.main === module) setTimeout(() => lego.load().then(() => console.log(`Lego-database geladen (${lego.size()} sets)`)).catch((e) => console.warn(e.message)), 15000).unref();
 ai.init((key) => { const r = db.prepare('SELECT value FROM meta WHERE key = ?').get(key); return r ? r.value : null; });
 const IMG_DIR = path.join(DATA_DIR, 'images');
 const jobs = createJobs(db, DATA_DIR);

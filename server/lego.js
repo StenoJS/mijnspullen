@@ -81,7 +81,7 @@ function createLego(dataDir) {
     };
   }
 
-  return { lookup, normalize, load };
+  return { lookup, normalize, load, size: () => (sets ? sets.size : 0) };
 }
 
 module.exports = { createLego };
