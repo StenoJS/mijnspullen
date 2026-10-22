@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.7.0
+# Mijn Spullen — 0.8.0
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -19,6 +19,13 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
 - Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
 - Activiteitenlog, CSV-export, donker thema (volgt systeem)
+
+### Nieuw in 0.8
+
+- **Dozenlijst importeren** (*Meer → Dozenlijst importeren*): een .ods- of .csv-sheet met per regel een doosnummer en in
+  de cellen ernaast de inhoud. Bestaande dozen ("Box 101", "Doos 101") en spullen worden herkend (Lego op setnummer, de
+  rest op naam), dus alleen wat ontbreekt staat aangevinkt; wat al op een andere plek staat wordt gemeld maar niet
+  aangevinkt. Lego-setnummers krijgen naam, thema, tag en foto. Er wordt vooraf een back-up gemaakt.
 
 ### Nieuw in 0.7
 

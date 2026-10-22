@@ -10,6 +10,7 @@ const { writeTar } = require('./tar');
 const { createJobs } = require('./jobs');
 const ai = require('./ai');
 const { createLego } = require('./lego');
+const boxes = require('./boxes');
 const fms = require('./fms');
 
 const VERSION = require('../package.json').version;
@@ -65,8 +66,8 @@ function readBody(req, limit) {
     req.on('error', reject);
   });
 }
-async function readJson(req) {
-  const buf = await readBody(req, MAX_JSON);
+async function readJson(req, limit = MAX_JSON) {
+  const buf = await readBody(req, limit);
   if (!buf.length) return {};
   try { return JSON.parse(buf.toString('utf8')); } catch { throw bad('Ongeldige JSON'); }
 }
@@ -1023,6 +1024,67 @@ route('POST', '/api/import.csv', USER, async ({ req, query, user }) => {
   const stats = importRecords(user, parsed.records, { dryRun, skipDuplicates: query.skip_duplicates !== '0' });
   if (!dryRun) changed(user, 'thing', null, req);
   return { dry_run: dryRun, rows: parsed.records.length, columns: parsed.columns, ...stats };
+});
+
+// ---------- Dozenlijst importeren (sheet: doosnummer + inhoud per cel) ----------
+// Stap 1: voorbeeld met wat al bestaat; stap 2: alleen de aangevinkte nieuwe dingen aanmaken.
+route('POST', '/api/import/boxes', USER, async ({ req }) => {
+  const buf = await readBody(req, 10 * 1024 * 1024);
+  let rows;
+  try { rows = boxes.readSheet(buf, String(req.headers['x-filename'] || '')); } catch (e) { throw bad(e.message); }
+  try {
+    return await boxes.plan(rows, { db, pathOf, allNames, lookupSet: async (code) => { try { return await lego.lookup(code); } catch { return null; } } });
+  } catch (e) { throw bad(e.message); }
+});
+route('POST', '/api/import/boxes/apply', USER, async ({ req, user }) => {
+  const b = await readJson(req, 2 * 1024 * 1024);
+  const list = Array.isArray(b.boxes) ? b.boxes.slice(0, 500) : [];
+  const parent = b.parent_id ? Number(b.parent_id) : null;
+  if (parent && !db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = 1').get(parent)) throw bad('Doel bestaat niet');
+  jobs.makeBackup(new Date().toISOString().slice(0, 19).replace(/:/g, '-'));
+  const t = now();
+  const ins = db.prepare(`INSERT INTO things(parent_id,is_container,name,description,notes,quantity,created_by,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`);
+  const stats = { boxes: 0, items: 0, photos_pending: 0 };
+  const photos = [];
+  let legoTag = null;
+  tx(db, () => {
+    for (const box of list) {
+      let boxId = box.existing_id ? Number(box.existing_id) : null;
+      if (boxId && !db.prepare('SELECT 1 FROM things WHERE id = ? AND is_container = 1').get(boxId)) boxId = null;
+      const items = Array.isArray(box.items) ? box.items.slice(0, 200) : [];
+      if (!boxId) {
+        if (!items.length && !box.create_empty) continue;
+        boxId = Number(ins.run(parent, 1, str(box.name || `Box ${box.number}`, 200), str((box.notes || []).join(', '), 2000), '', 1, user.id, user.id, t, t).lastInsertRowid);
+        stats.boxes++;
+      }
+      for (const it of items) {
+        const name = str(it.name, 200);
+        if (!name) continue;
+        const id = Number(ins.run(boxId, 0, name, str(it.description, 2000), '', Math.max(0, Number(it.quantity) || 1), user.id, user.id, t, t).lastInsertRowid);
+        if (it.lego) {
+          legoTag = legoTag || (db.prepare("SELECT id FROM tags WHERE lower(name) = 'lego'").get() || {}).id || Number(db.prepare("INSERT INTO tags(name, color) VALUES('Lego', '#e53935')").run().lastInsertRowid);
+          db.prepare('INSERT OR IGNORE INTO thing_tags(thing_id, tag_id) VALUES(?, ?)').run(id, legoTag);
+        }
+        if (it.image_url) photos.push([id, String(it.image_url)]);
+        stats.items++;
+      }
+    }
+    logActivity(user, null, 'import', `${user.display_name} importeerde een dozenlijst (${stats.boxes} dozen, ${stats.items} spullen)`);
+  });
+  stats.photos_pending = photos.length;
+  changed(user, 'thing', null, req);
+  // Foto's op de achtergrond ophalen (paar tegelijk), daarna nog een live-update.
+  (async () => {
+    const queue = photos.slice();
+    await Promise.all([0, 1, 2, 3].map(async () => {
+      for (let p = queue.shift(); p; p = queue.shift()) {
+        const img = await fetchImage(p[1], MAX_IMAGE).catch(() => null);
+        if (img && db.prepare('SELECT 1 FROM things WHERE id = ?').get(p[0])) storeImage(user, p[0], img.buf, img.mime, null);
+      }
+    }));
+    changed(user, 'thing', null, null);
+  })().catch((e) => console.warn('Foto\'s dozenlijst:', e.message));
+  return stats;
 });
 
 // ---------- Find my stuff-back-up (.bckp) importeren ----------

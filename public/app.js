@@ -833,6 +833,65 @@ async function contentsDialog(file, parentId) {
   if (saved) { toast(`${saved.n} spullen opgeslagen`); if (saved.target) location.hash = `#/c/${saved.target}`; else refresh?.(); }
 }
 
+// ============ dozenlijst importeren ============
+// Sheet (.ods/.csv) met per regel een doosnummer en de inhoud; eerst een voorbeeld, alleen nieuwe dingen worden aangevinkt.
+function boxImportDialog() {
+  return openDialog((close) => {
+    const fileI = h('input', { type: 'file', accept: '.ods,.csv,text/csv', style: 'display:none' });
+    const body = h('div', { class: 'dlg-scroll' },
+      h('p', { class: 'meta', style: 'margin:0 0 10px' }, 'Een sheet met per regel een doosnummer en in de cellen ernaast wat erin zit (setnummers, namen). De app zoekt bestaande dozen ("Box 101", "Doos 101") en spullen op, en stelt alleen voor wat nog ontbreekt.'),
+      h('button', { class: 'btn primary', onclick: () => fileI.click() }, icon('upload'), 'Kies .ods of .csv'));
+    const actions = h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(false) }, 'Sluiten'));
+    fileI.onchange = async () => {
+      const file = fileI.files[0]; if (!file) return;
+      body.replaceChildren(h('p', { class: 'nfc-wait' }, icon('upload'), 'Vergelijken met wat er al staat…'));
+      let p;
+      try { p = await api('POST', '/api/import/boxes', file, { 'Content-Type': 'application/octet-stream', 'X-Filename': file.name }); }
+      catch (ex) { body.replaceChildren(h('div', { class: 'error' }, ex.message)); return; }
+      draw(p);
+    };
+    const draw = (p) => {
+      let parent = p.default_parent;
+      const sel = new Map(); // item-object → checkbox
+      const all = p.boxes.flatMap((b) => b.items);
+      const nNew = all.filter((i) => i.status === 'new').length;
+      const parentBtn = h('button', { class: 'btn sm', type: 'button', onclick: async () => { const r = await pickLocation(null, parent && parent.id, true); if (!r) return; if (r.id) { const t = (await api('GET', `/api/things/${r.id}`)).thing; parent = { id: t.id, path: [...t.path, t].map((x) => x.name).join(' › ') }; } else parent = null; drawParent(); } });
+      const drawParent = () => parentBtn.replaceChildren(icon('move'), parent ? parent.path : 'Hoofdniveau');
+      drawParent();
+      const btn = h('button', { class: 'btn primary', onclick: () => apply() });
+      const count = () => { const n = [...sel.values()].filter((c) => c.checked).length; btn.textContent = `${n} ${n === 1 ? 'ding' : 'spullen'} importeren`; btn.disabled = !n; };
+      const st = { exists: 'al aanwezig', elsewhere: 'staat elders', new: 'nieuw' };
+      const cards = p.boxes.map((b) => {
+        const fresh = b.items.filter((i) => i.status !== 'exists');
+        const head = h('div', { class: 'dup-head' }, h('b', {}, b.existing ? b.existing.name : `Box ${b.number}`),
+          h('span', { class: 'meta' }, [b.existing ? `bestaat · ${b.existing.path}` : 'nieuwe doos', b.mark ? `"${b.mark}" in lijst` : '', b.notes.join(', ')].filter(Boolean).join(' · ')));
+        const rows = b.items.map((it) => {
+          if (it.status === 'exists') return h('div', { class: 'imp-row done' }, icon('check'), h('div', { class: 'main' }, h('div', { class: 'name' }, it.match.name), h('div', { class: 'sub' }, 'al aanwezig')));
+          const cb = h('input', { type: 'checkbox', checked: it.status === 'new', onchange: count });
+          sel.set(it, cb);
+          return h('label', { class: 'imp-row' }, cb, h('div', { class: 'main' }, h('div', { class: 'name' }, `${it.quantity > 1 ? `${it.quantity}× ` : ''}${it.name}`),
+            h('div', { class: 'sub' }, it.status === 'elsewhere' ? `staat al in ${it.match.path} (${it.match.name})` : it.text !== it.name ? `in lijst: ${it.text}` : st.new)));
+        });
+        if (!b.items.length) rows.push(h('div', { class: 'meta' }, 'Leeg in de lijst.'));
+        return h('details', { class: 'card imp-box', open: fresh.length > 0 }, h('summary', {}, head), h('div', {}, rows));
+      });
+      body.replaceChildren(
+        h('p', { style: 'margin:0 0 8px' }, `${p.boxes.length} dozen (${p.boxes.filter((b) => b.existing).length} bestaan al). ${nNew} nieuwe spullen, ${all.filter((i) => i.status === 'exists').length} al aanwezig, ${all.filter((i) => i.status === 'elsewhere').length} staan op een andere plek (niet aangevinkt).`),
+        h('div', { class: 'field' }, h('span', { class: 'label' }, 'Nieuwe dozen komen in'), parentBtn),
+        ...cards);
+      actions.replaceChildren(h('button', { class: 'btn', onclick: () => close(false) }, 'Annuleren'), btn);
+      count();
+      const apply = async () => {
+        btn.disabled = true;
+        const boxes = p.boxes.map((b) => ({ number: b.number, existing_id: b.existing && b.existing.id, notes: b.notes, items: b.items.filter((i) => sel.get(i) && sel.get(i).checked) }));
+        try { const r = await api('POST', '/api/import/boxes/apply', { parent_id: parent && parent.id, boxes }); toast(`${r.items} spullen en ${r.boxes} nieuwe dozen toegevoegd${r.photos_pending ? `; ${r.photos_pending} foto's worden opgehaald` : ''}`); close(true); }
+        catch (ex) { toast(ex.message, true); btn.disabled = false; }
+      };
+    };
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Dozenlijst importeren'), body, fileI, actions);
+  });
+}
+
 // ============ Lego-sets aanvullen ============
 // Spullen die alleen een setnummer als naam hebben: naam, omschrijving, tag Lego en foto uit Rebrickable.
 function legoDialog() {
@@ -1121,6 +1180,7 @@ async function viewMore(token) {
       h('div', { class: 'card' }, h('div', { class: 'actions' },
         h('a', { class: 'btn', href: '/api/export.csv', download: true }, icon('download'), 'Exporteer als CSV'),
         h('button', { class: 'btn', onclick: () => importDialog().then((ok) => ok && draw()) }, icon('upload'), 'Importeer CSV'),
+        h('button', { class: 'btn', onclick: () => boxImportDialog().then((ok) => ok && draw()) }, icon('upload'), 'Dozenlijst importeren'),
         h('a', { class: 'btn', href: '#/labels/0' }, icon('qr'), 'Labels printen'),
         h('a', { class: 'btn', href: '#/shopping' }, icon('cart'), 'Boodschappen'),
         h('a', { class: 'btn', href: '#/trash' }, icon('trash'), 'Prullenbak'),

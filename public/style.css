@@ -217,3 +217,14 @@ svg.qr { width: 100%; height: 100%; display: block; }
 .lego-row img, .lego-row .thumb { width: 48px; height: 48px; object-fit: contain; border-radius: 8px; background: #fff; }
 .lego-row .main { min-width: 0; }
 .lego-row .sub { color: var(--muted); font-size: .84rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-box { margin-bottom: 8px; padding: 10px 12px; }
+.imp-box summary { cursor: pointer; list-style: none; }
+.imp-box summary::-webkit-details-marker { display: none; }
+.imp-box .dup-head { margin: 0; flex-wrap: wrap; }
+.imp-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); }
+.imp-row input { width: 20px; height: 20px; accent-color: var(--accent); }
+.imp-row .main { min-width: 0; }
+.imp-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-row .sub { color: var(--muted); font-size: .82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-row.done { opacity: .55; }
+.imp-row.done svg { width: 18px; height: 18px; color: var(--accent); }
