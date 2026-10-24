@@ -19,6 +19,7 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+[hidden] { display: none !important; }
 body { min-height: 100dvh; overflow-wrap: anywhere; }  /* lange geplakte teksten breken de layout niet */
 .boot { padding: 40px 16px; color: var(--muted); text-align: center; }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -111,6 +112,13 @@ dialog::backdrop { background: rgba(5, 15, 14, .55); }
 .pick { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: transparent; padding: 10px; border-radius: 10px; cursor: pointer; }
 .pick:hover, .pick:focus-visible { background: var(--surface-2); outline: none; }
 .pick.cur { background: var(--accent-soft); }
+.pick-row { display: flex; align-items: center; gap: 2px; }
+.pick-row .pick { flex: 1; min-width: 0; }
+.pick-name { flex: 1; min-width: 0; }
+.pick small { color: var(--muted); font-size: .78rem; flex: none; }
+.tree-tg { width: 30px; height: 30px; flex: none; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 1.15rem; font-weight: 600; line-height: 1; cursor: pointer; display: grid; place-items: center; }
+button.tree-tg:hover { background: var(--surface-2); color: var(--text); }
+.dlg .search { margin-bottom: 8px; }
 .video-wrap { background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 4/3; display: grid; place-items: center; }
 .video-wrap video { width: 100%; height: 100%; object-fit: cover; }
 .dlg-actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }

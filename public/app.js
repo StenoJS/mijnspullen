@@ -212,6 +212,7 @@ function thingRow(t, { showPath } = {}) {
 // ============ bladeren ============
 // Ster in de bovenbalk: alleen favorieten tonen (hier en in alles eronder). Blijft aan tot je hem weer uitzet.
 let favOnly = false;
+let homeQ = ''; // zoektekst op het startscherm (blijft staan bij live updates)
 async function viewBrowse(id, token) {
   const load = async () => {
     const [cur, list, stats] = await Promise.all([
@@ -220,6 +221,7 @@ async function viewBrowse(id, token) {
       id ? null : api('GET', '/api/stats'),
     ]);
     if (stale(token)) return;
+    const typing = document.activeElement && document.activeElement.name === 'q'; // live update tijdens het typen: focus houden
     const c = cur && cur.thing;
     const parentHref = c ? (c.path.length ? `#/c/${c.path[c.path.length - 1].id}` : '#/') : null;
     const main = shell(c ? c.name : 'Mijn Spullen', {
@@ -231,7 +233,7 @@ async function viewBrowse(id, token) {
     if (!c) {
       const s = stats.stats;
       main.append(
-        h('form', { class: 'search', onsubmit: (e) => { e.preventDefault(); location.hash = `#/search?q=${encodeURIComponent(e.target.q.value)}`; } }, icon('search'), h('input', { name: 'q', placeholder: 'Zoek in al je spullen…', type: 'search', 'aria-label': 'Zoeken' })),
+        h('form', { class: 'search', onsubmit: (e) => { e.preventDefault(); location.hash = `#/search?q=${encodeURIComponent(e.target.q.value)}`; } }, icon('search'), h('input', { name: 'q', placeholder: 'Zoek in al je spullen…', type: 'search', 'aria-label': 'Zoeken', value: homeQ, oninput: debounce((e) => liveSearch(e.target.value), 200) })),
         h('div', { class: 'stats' },
           h('a', { class: 'stat', href: '#/search' }, h('b', {}, num(s.items)), h('span', {}, 'items')),
           h('a', { class: 'stat' + (s.shopping ? ' alert' : ''), href: '#/shopping' }, h('b', {}, num(s.shopping)), h('span', {}, 'op lijst')),
@@ -240,12 +242,31 @@ async function viewBrowse(id, token) {
     } else {
       main.append(h('nav', { class: 'crumbs', 'aria-label': 'Locatie' }, h('a', { href: '#/' }, 'Alles'), c.path.map((p) => [' › ', h('a', { href: `#/c/${p.id}` }, p.name)]), ' › ', h('b', {}, c.name)));
     }
+    // Live zoeken op het startscherm: resultaten verschijnen al tijdens het typen in plaats van de lijst.
+    const resultsBox = h('div', { class: 'list' });
+    const liveSearch = async (value) => {
+      homeQ = value.trim();
+      const rest = [...main.children].filter((el) => el.dataset.browse || el.classList.contains('stats'));
+      rest.forEach((el) => { el.hidden = !!homeQ; });
+      resultsBox.hidden = !homeQ;
+      if (!homeQ) return;
+      const r = await api('GET', `/api/things?q=${encodeURIComponent(homeQ)}&sort=name`).catch(() => null);
+      if (!r || stale(token) || homeQ !== value.trim()) return;
+      resultsBox.replaceChildren(...(r.things.length ? r.things.slice(0, 100).map((t) => thingRow(t, { showPath: true })) : [h('div', { class: 'empty' }, 'Niets gevonden.')]));
+    };
+    const browseStart = main.children.length;
     if (favOnly) main.append(h('div', { class: 'filter-note' }, icon('star'), h('span', {}, list.things.length ? `Alleen favorieten${c ? ` in ${c.name}` : ''}` : 'Nog geen favorieten hier. Zet bij een item "Favoriet" aan.'), h('button', { class: 'btn sm ghost', onclick: () => { favOnly = false; load(); } }, 'Alles tonen')));
     if (favOnly && !list.things.length) { /* melding staat er al */ } else if (!list.things.length) {
       main.append(h('div', { class: 'empty' }, c ? 'Hier staat nog niets.' : 'Begin met een plek, bijvoorbeeld "Huis" of "Zolder".', h('br'),
         h('a', { class: 'btn primary', href: `#/new?container=1${id ? `&parent=${id}` : ''}` }, icon('plus'), 'Nieuwe container')));
     } else {
       main.append(h('div', { class: 'list' }, list.things.map((t) => thingRow(t, { showPath: favOnly }))));
+    }
+    [...main.children].slice(browseStart).forEach((el) => { el.dataset.browse = '1'; });
+    if (!c) {
+      main.append(resultsBox); resultsBox.hidden = true;
+      if (homeQ) liveSearch(homeQ);
+      if (typing) { const qi = main.querySelector('input[name=q]'); qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
     }
     if (sel.on) main.append(bulkBar(load));
     else main.append(h('button', { class: 'fab', 'aria-label': 'Toevoegen', onclick: () => addDialog(id) }, icon('plus')));
@@ -437,15 +458,40 @@ async function pickLocation(excludeId, currentId, onlyContainers) {
   nodes.forEach((n) => { const k = n.parent_id || 0; (kids.get(k) || kids.set(k, []).get(k)).push(n); });
   const banned = new Set();
   if (excludeId) { const walk = (i) => { banned.add(i); (kids.get(i) || []).forEach((c) => walk(c.id)); }; walk(excludeId); }
+  // Boom standaard ingeklapt (+ om uit te klappen); de weg naar de huidige plek staat open. Typen filtert.
+  const shown = (pid) => (kids.get(pid) || []).filter((n) => !banned.has(n.id) && (!onlyContainers || n.is_container));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const open = new Set();
+  for (let c = byId.get(currentId); c && c.parent_id; c = byId.get(c.parent_id)) open.add(c.parent_id);
+  let filter = '';
+  const matches = new Map(); // id → zelf of iets eronder past bij het filter
+  const hit = (n) => {
+    if (matches.has(n.id)) return matches.get(n.id);
+    const r = n.name.toLowerCase().includes(filter) || shown(n.id).some(hit);
+    matches.set(n.id, r); return r;
+  };
   return openDialog((close) => {
-    const rows = [h('button', { class: 'pick' + (!currentId ? ' cur' : ''), type: 'button', onclick: () => close({ id: null }) }, icon('home'), 'Hoofdniveau (geen locatie)')];
-    const walk = (pid, depth) => (kids.get(pid) || []).forEach((n) => {
-      if (banned.has(n.id) || (onlyContainers && !n.is_container)) return;
-      rows.push(h('button', { class: 'pick' + (n.id === currentId ? ' cur' : ''), type: 'button', style: `padding-left:${10 + depth * 18}px`, onclick: () => close({ id: n.id }) }, icon(n.is_container ? 'folder' : 'box'), n.name));
-      walk(n.id, depth + 1);
-    });
-    walk(0, 1);
-    return h('div', { class: 'dlg' }, h('h2', {}, 'Kies een locatie'), h('div', { class: 'dlg-scroll' }, rows), h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(undefined) }, 'Annuleren')));
+    const box = h('div', { class: 'dlg-scroll' });
+    const draw = () => {
+      matches.clear();
+      const rows = filter ? [] : [h('button', { class: 'pick' + (!currentId ? ' cur' : ''), type: 'button', onclick: () => close({ id: null }) }, icon('home'), 'Hoofdniveau (geen locatie)')];
+      const walk = (pid, depth) => shown(pid).forEach((n) => {
+        if (filter && !hit(n)) return;
+        const sub = shown(n.id).length;
+        const isOpen = filter ? true : open.has(n.id);
+        rows.push(h('div', { class: 'pick-row', style: `padding-left:${depth * 16}px` },
+          sub ? h('button', { class: 'tree-tg', type: 'button', 'aria-label': isOpen ? 'Inklappen' : 'Uitklappen', 'aria-expanded': String(isOpen), onclick: () => { if (open.has(n.id)) open.delete(n.id); else open.add(n.id); draw(); } }, isOpen ? '−' : '+') : h('span', { class: 'tree-tg' }),
+          h('button', { class: 'pick' + (n.id === currentId ? ' cur' : ''), type: 'button', onclick: () => close({ id: n.id }) }, icon(n.is_container ? 'folder' : 'box'), h('span', { class: 'pick-name' }, n.name), sub && !isOpen ? h('small', {}, String(sub)) : null)));
+        if (isOpen) walk(n.id, depth + 1);
+      });
+      walk(0, 0);
+      if (filter && !rows.length) rows.push(h('div', { class: 'empty' }, 'Niets gevonden.'));
+      box.replaceChildren(...rows);
+    };
+    const search = h('input', { type: 'search', placeholder: 'Zoek een plek…', 'aria-label': 'Zoek een plek', oninput: debounce(() => { filter = search.value.trim().toLowerCase(); draw(); }, 150) });
+    draw();
+    setTimeout(() => { const cur = box.querySelector('.pick.cur'); if (cur) cur.scrollIntoView({ block: 'center' }); }, 0);
+    return h('div', { class: 'dlg' }, h('h2', {}, 'Kies een locatie'), h('div', { class: 'search' }, icon('search'), search), box, h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(undefined) }, 'Annuleren')));
   });
 }
 
