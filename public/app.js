@@ -186,7 +186,12 @@ function badgesFor(t) {
 function thingRow(t, { showPath } = {}) {
   const go = () => {
     if (sel.swallow) { sel.swallow = false; return; } // de klik bij het loslaten na lang indrukken
-    if (sel.on) { if (sel.ids.has(t.id)) sel.ids.delete(t.id); else sel.ids.add(t.id); row.classList.toggle('picked', sel.ids.has(t.id)); sel.count && sel.count(); return; }
+    if (sel.on) {
+      if (sel.ids.has(t.id)) sel.ids.delete(t.id); else sel.ids.add(t.id);
+      // Laatste vinkje weg: selecteren gaat vanzelf uit.
+      if (!sel.ids.size && sel.redraw) { sel.on = false; sel.redraw(); return; }
+      row.classList.toggle('picked', sel.ids.has(t.id)); sel.count && sel.count(); return;
+    }
     location.hash = t.is_container ? `#/c/${t.id}` : `#/t/${t.id}`;
   };
   const thumb = h('div', { class: 'thumb' }, t.cover_image_id ? h('img', { src: `/api/images/${t.cover_image_id}?thumb=1`, loading: 'lazy', alt: '' }) : icon(t.is_container ? 'folder' : 'box'));
