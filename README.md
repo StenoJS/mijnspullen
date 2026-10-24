@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.8.6
+# Mijn Spullen — 0.8.7
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -39,6 +39,7 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
   activiteit ingekort.
 - 0.8.6: **live zoeken** op het startscherm (resultaten verschijnen tijdens het typen); bij "Kies een locatie" is de
   boom ingeklapt met een **+** per plek (de weg naar de huidige plek staat open) en kun je bovenin op naam filteren.
+- 0.8.7: **lang indrukken** op een ding of doos zet selecteren aan met dat ding al aangevinkt (naast het vinkjes-icoon).
 
 ### Nieuw in 0.7
 

@@ -108,7 +108,7 @@ const scanBtn = (ctx) => h('button', { class: 'btn icon ghost', 'aria-label': 'S
 async function route() {
   const token = ++routeToken;
   refresh = null;
-  sel.on = false; sel.ids.clear();
+  sel.on = false; sel.ids.clear(); sel.redraw = null;
   const raw = location.hash.slice(1) || '/';
   const [p, qs] = raw.split('?');
   const q = Object.fromEntries(new URLSearchParams(qs || ''));
@@ -136,8 +136,9 @@ async function route() {
 const stale = (t) => t !== routeToken;
 
 // ============ selecteren (meerdere tegelijk) ============
-const sel = { on: false, ids: new Set(), bar: null, count: null };
+const sel = { on: false, ids: new Set(), bar: null, count: null, redraw: null }; // redraw: lang indrukken zet selecteren aan
 function selectBtn(redraw) {
+  sel.redraw = redraw;
   return h('button', { class: 'btn icon ghost' + (sel.on ? ' primary' : ''), 'aria-label': 'Selecteren', title: 'Meerdere selecteren', onclick: () => { sel.on = !sel.on; sel.ids.clear(); redraw(); } }, icon('select'));
 }
 function bulkBar(redraw) {
@@ -184,6 +185,7 @@ function badgesFor(t) {
 }
 function thingRow(t, { showPath } = {}) {
   const go = () => {
+    if (sel.swallow) { sel.swallow = false; return; } // de klik bij het loslaten na lang indrukken
     if (sel.on) { if (sel.ids.has(t.id)) sel.ids.delete(t.id); else sel.ids.add(t.id); row.classList.toggle('picked', sel.ids.has(t.id)); sel.count && sel.count(); return; }
     location.hash = t.is_container ? `#/c/${t.id}` : `#/t/${t.id}`;
   };
@@ -196,6 +198,23 @@ function thingRow(t, { showPath } = {}) {
     sel.on && h('span', { class: 'pickbox' }, icon('check')),
     thumb,
     h('div', { class: 'main' }, h('div', { class: 'name' }, (t.favourite ? '★ ' : '') + t.name), sub && h('div', { class: 'sub' }, sub), h('div', { class: 'badges' }, badgesFor(t))));
+  // Lang indrukken (± half seconde): selecteren aanzetten met dit ding al aangevinkt.
+  let timer = null, sx = 0, sy = 0;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  row.addEventListener('pointerdown', (e) => {
+    sel.swallow = false;
+    if (sel.on || !sel.redraw || e.button > 0 || e.target.closest('.qty')) return;
+    sx = e.clientX; sy = e.clientY;
+    timer = setTimeout(() => {
+      timer = null; sel.swallow = true;
+      navigator.vibrate?.(15);
+      sel.on = true; sel.ids.clear(); sel.ids.add(t.id);
+      sel.redraw();
+    }, 500);
+  });
+  row.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => row.addEventListener(ev, cancel));
+  row.addEventListener('contextmenu', (e) => { if (sel.redraw) e.preventDefault(); });
   if (!t.is_container && !sel.on) {
     const out = h('output', {}, num(t.quantity));
     const adj = (delta) => async (e) => {
@@ -303,6 +322,7 @@ async function viewSearch(q, token) {
   const barBox = h('div');
   const redraw = () => { sb.classList.toggle('primary', sel.on); barBox.replaceChildren(...flat(bulkBar(redraw))); run().catch(() => {}); };
   const sb = h('button', { class: 'btn icon ghost', 'aria-label': 'Selecteren', title: 'Meerdere selecteren', onclick: () => { sel.on = !sel.on; sel.ids.clear(); redraw(); } }, icon('select'));
+  sel.redraw = redraw;
   const main = shell('Zoeken', { tab: 'search', actions: [sb, scanBtn(null)] });
   const results = h('div', { class: 'list' });
   const input = h('input', { type: 'search', placeholder: 'Naam, omschrijving, barcode of tag…', value: state.q, 'aria-label': 'Zoeken' });
