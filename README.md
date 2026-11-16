@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.9.0
+# Mijn Spullen — 0.9.1
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -42,6 +42,7 @@ houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die a
 - 0.8.7: **lang indrukken** op een ding of doos zet selecteren aan met dat ding al aangevinkt (naast het vinkjes-icoon).
 - 0.8.8: vink je het laatste geselecteerde ding uit, dan gaat selecteren vanzelf weer uit.
 - 0.9.0: **onderhoud na code review**: id's van spullen en foto's worden nooit hergebruikt (een oud QR-label of NFC-tag wijst niet meer naar iets nieuws, geen verkeerde foto uit de cache; vóór de omzetting wordt automatisch een back-up gemaakt), houdbaarheid rekent met de lokale datum, losse back-ups (imports, samenvoegen) drukken de dagelijkse niet meer weg, de volledige back-up bevat ook foto's uit de prullenbak, een mislukte barcode-opzoeking wordt niet meer onthouden, en een paar ongeldige verzoeken geven een nette melding in plaats van "Interne fout".
+- 0.9.1: tags met een lichte kleur (geel, lichtblauw…) krijgen donkere tekst, zodat ze leesbaar zijn.
 
 ### Nieuw in 0.7
 
