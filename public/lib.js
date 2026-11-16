@@ -19,6 +19,15 @@ export function h(tag, attrs, ...kids) {
   return el;
 }
 
+// Tekstkleur die leesbaar is op een tagkleur: donker op lichte kleuren, wit op donkere (relatieve luminantie).
+export function textOn(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#fff';
+  const lin = (i) => { const c = parseInt(m[1].slice(i, i + 2), 16) / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  return L > 0.35 ? '#1f2937' : '#fff'; // grens iets boven het wiskundige midden: rood/oranje-rood houdt witte tekst
+}
+
 export const flat = (...kids) => kids.flat(Infinity).filter((k) => k != null && k !== false);
 
 const ICONS = {

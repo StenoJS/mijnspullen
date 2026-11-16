@@ -1,4 +1,4 @@
-import { CLIENT_ID, h, flat, icon, api, ApiError, setUnauthorizedHandler, money, num, daysUntil, fmtDate, expiryText, debounce, toast, openDialog, confirmDialog, uploadPhoto, shrinkImage } from './lib.js';
+import { CLIENT_ID, h, flat, icon, api, ApiError, setUnauthorizedHandler, money, num, daysUntil, fmtDate, expiryText, debounce, toast, openDialog, confirmDialog, uploadPhoto, shrinkImage, textOn } from './lib.js';
 import { nfcSupported, readTag, linkTag } from './nfc.js';
 import { qrSvg } from './qr.js';
 
@@ -180,7 +180,7 @@ function badgesFor(t) {
   if (!t.is_container && t.min_quantity != null && t.quantity <= t.min_quantity) b.push(h('span', { class: 'badge low' }, 'Bijna op'));
   const d = daysUntil(t.expires_on);
   if (d != null && d <= 30) b.push(h('span', { class: 'badge exp' }, d < 0 ? 'Verlopen' : d === 0 ? 'Vandaag' : `Nog ${d} d`));
-  for (const tid of t.tag_ids.slice(0, 3)) { const g = tagById(tid); if (g) b.push(h('span', { class: 'badge tag', style: `background:${g.color}` }, g.name)); }
+  for (const tid of t.tag_ids.slice(0, 3)) { const g = tagById(tid); if (g) b.push(h('span', { class: 'badge tag', style: `background:${g.color};color:${textOn(g.color)}` }, g.name)); }
   return b;
 }
 function thingRow(t, { showPath } = {}) {
@@ -1225,7 +1225,7 @@ async function viewTags(token) {
     const flat = tagsFlat();
     if (!flat.length) { main.append(h('div', { class: 'empty' }, 'Nog geen tags. Tags helpen je dingen te groeperen, bijvoorbeeld "Gereedschap" of "Winter".', h('br'), h('button', { class: 'btn primary', onclick: async () => { if (await tagDialog()) draw(); } }, icon('plus'), 'Eerste tag'))); return; }
     main.append(h('div', { class: 'list' }, flat.map((t) => h('div', { class: 'row', style: `margin-left:${t.depth * 16}px` },
-      h('div', { class: 'thumb', style: `background:${t.color};color:#fff` }, icon('tag')),
+      h('div', { class: 'thumb', style: `background:${t.color};color:${textOn(t.color)}` }, icon('tag')),
       h('a', { class: 'main', href: `#/search?tag=${t.id}`, style: 'text-decoration:none;color:inherit' }, h('div', { class: 'name' }, t.name), h('div', { class: 'sub' }, `${t.use_count} item${t.use_count === 1 ? '' : 's'}`)),
       h('button', { class: 'btn sm', onclick: async () => { if (await tagDialog(t)) draw(); } }, 'Bewerk'),
       h('button', { class: 'btn sm danger', 'aria-label': 'Verwijderen', onclick: async () => { if (!await confirmDialog(`Tag "${t.name}" verwijderen?`, 'De tag wordt van alle items gehaald. De items zelf blijven bestaan.')) return; try { await api('DELETE', `/api/tags/${t.id}`); await loadTags(); draw(); } catch (ex) { toast(ex.message, true); } } }, icon('trash'))))));
