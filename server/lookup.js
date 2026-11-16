@@ -16,6 +16,7 @@ async function getJson(url, ms) {
   const t = setTimeout(() => ctl.abort(), ms);
   try {
     const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal: ctl.signal });
+    if (r.status === 404) return { status: 0 }; // bestaat niet: geldig 'niet gevonden'
     if (!r.ok) return null;
     return await r.json();
   } catch { return null; } finally { clearTimeout(t); }
@@ -26,8 +27,10 @@ async function lookupBarcode(code) {
   if (!/^\d{6,14}$/.test(code)) return null;
   if (cache.has(code)) return cache.get(code);
   const fields = 'product_name,product_name_nl,generic_name_nl,generic_name,brands,quantity,image_front_url,image_url,categories';
+  let failed = false;
   for (const base of SOURCES) {
     const j = await getJson(`${base}/api/v2/product/${code}.json?fields=${fields}`, 4000);
+    if (!j) failed = true;
     const p = j && j.status === 1 && j.product;
     if (!p) continue;
     const name = (p.product_name_nl || p.product_name || '').trim();
@@ -43,7 +46,8 @@ async function lookupBarcode(code) {
     if (cache.size > 500) cache.delete(cache.keys().next().value);
     return out;
   }
-  cache.set(code, null);
+  // Alleen 'niet gevonden' onthouden; bij een storing of time-out de volgende keer gewoon opnieuw proberen.
+  if (!failed) cache.set(code, null);
   return null;
 }
 

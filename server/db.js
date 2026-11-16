@@ -4,7 +4,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'images'), { recursive: true });
@@ -12,11 +12,11 @@ function openDb(dataDir) {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA busy_timeout = 5000;');
-  migrate(db);
+  migrate(db, dataDir);
   return db;
 }
 
-function migrate(db) {
+function migrate(db, dataDir) {
   db.exec('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)');
   const row = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get();
   const current = row ? Number(row.value) : 0;
@@ -143,8 +143,55 @@ function migrate(db) {
     // Profielfoto per gebruiker (bestand images/avatar-<id>.jpg); de tijd dient ook als versie voor de cache.
     db.exec('ALTER TABLE users ADD COLUMN avatar_at TEXT;');
   }
+  if (current < 5) {
+    // Id's nooit hergebruiken: anders wijst een oud QR-label/NFC-tag naar een nieuw ding, toont de browser een
+    // oude foto uit de cache (foto's zijn 'immutable') en botsen foto-bestanden in de prullenbak.
+    if (current > 0 && dataDir && db.prepare('SELECT COUNT(*) c FROM things').get().c > 0) {
+      const dir = path.join(dataDir, 'backups');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `mijn-spullen-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.db`);
+      if (!fs.existsSync(file)) db.prepare('VACUUM INTO ?').run(file);
+    }
+    db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      tx(db, () => {
+        addAutoincrement(db, 'things');
+        addAutoincrement(db, 'images');
+        const trashMax = (key) => db.prepare(`SELECT MAX(json_extract(j.value, '$.id')) m FROM trash, json_each(trash.payload, '$.${key}') j`).get().m || 0;
+        seedSequence(db, 'things', Math.max(trashMax('things'), db.prepare('SELECT MAX(thing_id) m FROM activity').get().m || 0));
+        seedSequence(db, 'images', trashMax('images'));
+        const bad = db.prepare('PRAGMA foreign_key_check').all();
+        if (bad.length) throw new Error(`Migratie v5: ${bad.length} ongeldige verwijzingen`);
+      });
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON;');
+    }
+  }
   db.prepare("INSERT INTO meta(key,value) VALUES('schema_version',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
     .run(String(SCHEMA_VERSION));
+}
+
+// Tabel opnieuw opbouwen met AUTOINCREMENT (kolommen, volgorde en indexen blijven gelijk).
+function addAutoincrement(db, table) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  if (!row || /AUTOINCREMENT/i.test(row.sql)) return;
+  const create = row.sql
+    .replace(/^CREATE TABLE\s+"?\w+"?/i, `CREATE TABLE ${table}_new`)
+    .replace(/\bid INTEGER PRIMARY KEY\b/i, 'id INTEGER PRIMARY KEY AUTOINCREMENT');
+  if (!/AUTOINCREMENT/.test(create)) throw new Error(`Migratie v5: kan ${table} niet omzetten`);
+  const indexes = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL").all(table);
+  db.exec(create);
+  db.exec(`INSERT INTO ${table}_new SELECT * FROM ${table}`);
+  db.exec(`DROP TABLE ${table}`);
+  db.exec(`ALTER TABLE ${table}_new RENAME TO ${table}`);
+  for (const i of indexes) db.exec(i.sql);
+}
+// Volgende id hoger dan alles wat ooit bestond (ook wat nu in de prullenbak ligt).
+function seedSequence(db, table, floor) {
+  const max = Math.max(floor || 0, db.prepare(`SELECT COALESCE(MAX(id), 0) m FROM ${table}`).get().m);
+  const cur = db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(table);
+  if (cur) { if (cur.seq < max) db.prepare('UPDATE sqlite_sequence SET seq = ? WHERE name = ?').run(max, table); }
+  else db.prepare('INSERT INTO sqlite_sequence(name, seq) VALUES(?, ?)').run(table, max);
 }
 
 function tx(db, fn) {
