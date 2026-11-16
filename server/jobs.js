@@ -10,6 +10,7 @@ const NOTIFY_DAYS = Math.max(0, Number(process.env.NOTIFY_DAYS ?? 7));
 const HA_WEBHOOK_URL = process.env.HA_WEBHOOK_URL || '';
 const APP_URL = (process.env.APP_URL || '').replace(/\/+$/, '');
 
+const DAILY = /^mijn-spullen-\d{4}-\d{2}-\d{2}\.db$/;
 const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 function createJobs(db, dataDir) {
@@ -29,7 +30,11 @@ function createJobs(db, dataDir) {
     try { fs.unlinkSync(file); } catch { /* bestaat nog niet */ }
     // VACUUM INTO maakt een consistente kopie terwijl de app gewoon doordraait.
     db.prepare('VACUUM INTO ?').run(file);
-    for (const old of listBackups().slice(BACKUP_KEEP)) { try { fs.unlinkSync(path.join(backupDir, old.name)); } catch { /* */ } }
+    // Dagelijkse en losse back-ups (handmatig, vóór een import of samenvoegen) apart tellen: een reeks imports
+    // mag de dagelijkse historie niet wegdrukken.
+    const all = listBackups();
+    const daily = all.filter((b) => DAILY.test(b.name)), other = all.filter((b) => !DAILY.test(b.name));
+    for (const old of [...daily.slice(BACKUP_KEEP), ...other.slice(BACKUP_KEEP)]) { try { fs.unlinkSync(path.join(backupDir, old.name)); } catch { /* */ } }
     return name;
   }
   function backupFile(name) {
@@ -82,8 +87,8 @@ function createJobs(db, dataDir) {
   function expiryChanged(thingId) { db.prepare("DELETE FROM notified WHERE thing_id = ? AND kind = 'expiring'").run(thingId); }
 
   async function notifyExpiring(force) {
-    const rows = db.prepare(`SELECT * FROM things WHERE expires_on IS NOT NULL AND expires_on <= date('now', 'localtime', ?)
-      ${force ? '' : "AND id NOT IN (SELECT thing_id FROM notified WHERE kind = 'expiring')"} ORDER BY expires_on LIMIT 50`).all(`+${NOTIFY_DAYS} days`);
+    const rows = db.prepare(`SELECT * FROM things WHERE expires_on IS NOT NULL AND expires_on <= date(?, ?)
+      ${force ? '' : "AND id NOT IN (SELECT thing_id FROM notified WHERE kind = 'expiring')"} ORDER BY expires_on LIMIT 50`).all(localDay(), `+${NOTIFY_DAYS} days`);
     if (!rows.length) return { ok: true, count: 0 };
     const items = rows.map(describe);
     const names = rows.slice(0, 5).map((t) => `${t.name} (${t.expires_on})`).join(', ');
@@ -96,8 +101,8 @@ function createJobs(db, dataDir) {
   }
 
   async function notifyOverdueLending() {
-    const rows = db.prepare(`SELECT * FROM things WHERE lent_to IS NOT NULL AND lent_due IS NOT NULL AND lent_due < date('now', 'localtime')
-      AND id NOT IN (SELECT thing_id FROM notified WHERE kind = 'lend') ORDER BY lent_due LIMIT 50`).all();
+    const rows = db.prepare(`SELECT * FROM things WHERE lent_to IS NOT NULL AND lent_due IS NOT NULL AND lent_due < ?
+      AND id NOT IN (SELECT thing_id FROM notified WHERE kind = 'lend') ORDER BY lent_due LIMIT 50`).all(localDay());
     if (!rows.length) return { ok: true, count: 0 };
     const items = rows.map((t) => ({ ...describe(t), lent_to: t.lent_to, lent_due: t.lent_due }));
     const r = await sendHa({ event: 'lend_overdue', title: 'Uitgeleend', message: rows.map((t) => `${t.name} bij ${t.lent_to} (terug op ${t.lent_due})`).join(', '), items });
@@ -108,7 +113,7 @@ function createJobs(db, dataDir) {
 
   function summary() {
     const low = db.prepare('SELECT * FROM things WHERE is_container = 0 AND min_quantity IS NOT NULL AND quantity <= min_quantity ORDER BY name COLLATE NOCASE LIMIT 100').all();
-    const expiring = db.prepare("SELECT * FROM things WHERE expires_on IS NOT NULL AND expires_on <= date('now', 'localtime', ?) ORDER BY expires_on LIMIT 100").all(`+${NOTIFY_DAYS} days`);
+    const expiring = db.prepare("SELECT * FROM things WHERE expires_on IS NOT NULL AND expires_on <= date(?, ?) ORDER BY expires_on LIMIT 100").all(localDay(), `+${NOTIFY_DAYS} days`);
     const c = db.prepare('SELECT SUM(is_container = 0) items, SUM(is_container = 1) containers, SUM(lent_to IS NOT NULL) lent FROM things').get();
     return { items: c.items || 0, containers: c.containers || 0, lent_count: c.lent || 0, low_count: low.length, expiring_count: expiring.length, expiring_days: NOTIFY_DAYS, low: low.map(describe), expiring: expiring.map(describe) };
   }

@@ -52,6 +52,8 @@ const dateOrNull = (v) => {
 };
 const bool = (v) => (v ? 1 : 0);
 const num = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
+// Vandaag in lokale tijd (TZ). SQLite's date('now') is UTC, en 'localtime' werkt niet in node:alpine (geen tzdata).
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
@@ -187,7 +189,7 @@ function listThings(q) {
   if (q.low === '1') where.push('t.is_container = 0 AND t.min_quantity IS NOT NULL AND t.quantity <= t.min_quantity');
   if (q.expiring) {
     const days = Math.max(0, Math.min(3650, Number(q.expiring) || 0));
-    where.push("t.expires_on IS NOT NULL AND t.expires_on <= date('now', ?)"); args.push(`+${days} days`);
+    where.push("t.expires_on IS NOT NULL AND t.expires_on <= date(?, ?)"); args.push(today(), `+${days} days`);
   }
   if (q.favourite === '1') where.push('t.favourite = 1');
   if (q.lent === '1') where.push('t.lent_to IS NOT NULL');
@@ -550,7 +552,10 @@ function tagInput(b, partial) {
   const o = {};
   if (!partial || 'name' in b) { o.name = str(b.name, 60); if (!o.name) throw bad('Naam is verplicht'); }
   if ('color' in b) { if (!/^#[0-9a-fA-F]{6}$/.test(String(b.color))) throw bad('Kleur moet #RRGGBB zijn'); o.color = String(b.color).toLowerCase(); }
-  if ('parent_id' in b) o.parent_id = b.parent_id == null || b.parent_id === '' ? null : Number(b.parent_id);
+  if ('parent_id' in b) {
+    o.parent_id = b.parent_id == null || b.parent_id === '' ? null : Number(b.parent_id);
+    if (o.parent_id != null && !db.prepare('SELECT 1 FROM tags WHERE id = ?').get(o.parent_id)) throw bad('Bovenliggende tag bestaat niet');
+  }
   return o;
 }
 route('POST', '/api/tags', USER, async ({ req, user }) => {
@@ -715,7 +720,9 @@ route('GET', '/api/images/:id', USER, ({ params, query, res }) => {
   const useThumb = query.thumb === '1' && img.has_thumb;
   const file = path.join(IMG_DIR, `${img.id}${useThumb ? '.thumb' : ''}.${img.ext}`);
   if (!fs.existsSync(file)) throw new HttpError(404, 'Bestand ontbreekt');
-  res.writeHead(200, { 'Content-Type': img.mime, 'Cache-Control': 'private, max-age=31536000, immutable' });
+  // Thumbnail gevraagd maar (nog) niet aanwezig: het origineel niet een jaar lang als thumbnail laten cachen.
+  const cache = query.thumb === '1' && !useThumb ? 'private, no-cache' : 'private, max-age=31536000, immutable';
+  res.writeHead(200, { 'Content-Type': img.mime, 'Cache-Control': cache });
   fs.createReadStream(file).pipe(res);
   return res;
 });
@@ -737,10 +744,10 @@ route('GET', '/api/stats', USER, () => {
     COALESCE(SUM(CASE WHEN is_container = 0 THEN quantity END), 0) AS total_quantity,
     COALESCE(SUM(CASE WHEN is_container = 0 AND price IS NOT NULL THEN price * quantity END), 0) AS total_value,
     SUM(is_container = 0 AND min_quantity IS NOT NULL AND quantity <= min_quantity) AS low,
-    SUM(expires_on IS NOT NULL AND expires_on <= date('now', '+30 days')) AS expiring,
+    SUM(expires_on IS NOT NULL AND expires_on <= date(?, '+30 days')) AS expiring,
     SUM(lent_to IS NOT NULL) AS lent,
     SUM(is_container = 0 AND (on_list = 1 OR (min_quantity IS NOT NULL AND quantity <= min_quantity))) AS shopping
-    FROM things`).get();
+    FROM things`).get(today());
   return { stats: { items: s.items || 0, containers: s.containers || 0, total_quantity: s.total_quantity, total_value: s.total_value, low: s.low || 0, expiring: s.expiring || 0, lent: s.lent || 0, shopping: s.shopping || 0 } };
 });
 route('GET', '/api/activity', USER, ({ query }) => ({
@@ -830,7 +837,8 @@ route('POST', '/api/things/bulk', USER, async ({ req, user }) => {
     });
   } else if (b.action === 'favourite' || b.action === 'list') {
     const col = b.action === 'favourite' ? 'favourite' : 'on_list';
-    for (const id of existing) { db.prepare(`UPDATE things SET ${col} = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?`).run(bool(b.value), user.id, now(), id); done++; }
+    const upd = db.prepare(`UPDATE things SET ${col} = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE id = ?`);
+    tx(db, () => { for (const id of existing) { upd.run(bool(b.value), user.id, now(), id); done++; } });
   } else throw bad('Onbekende actie');
   if (b.action !== 'delete') logActivity(user, null, 'bulk', `${user.display_name} paste ${done} spullen tegelijk aan (${b.action})`);
   changed(user, 'thing', null, req);
@@ -1191,6 +1199,7 @@ route('GET', '/api/backup.tar', ADMIN, async ({ res }) => {
   const snap = jobs.snapshot();
   const entries = [{ name: 'mijn-spullen.db', file: snap }];
   for (const f of fs.readdirSync(IMG_DIR)) entries.push({ name: `images/${f}`, file: path.join(IMG_DIR, f) });
+  for (const f of fs.readdirSync(TRASH_DIR)) entries.push({ name: `images/trash/${f}`, file: path.join(TRASH_DIR, f) }); // foto's van spullen in de prullenbak
   res.writeHead(200, { 'Content-Type': 'application/x-tar', 'Content-Disposition': `attachment; filename="mijn-spullen-volledig-${new Date().toISOString().slice(0, 10)}.tar"`, 'Cache-Control': 'no-store' });
   try { await writeTar(res, entries); } finally { fs.unlink(snap, () => {}); }
   return res;
@@ -1243,7 +1252,11 @@ const server = http.createServer(async (req, res) => {
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = r.rx.exec(url.pathname);
-      if (m) { matched = r; r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); }); break; }
+      if (m) {
+        matched = r;
+        try { r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); }); } catch { throw bad('Ongeldig adres'); }
+        break;
+      }
     }
     if (!matched) throw new HttpError(404, 'Onbekend endpoint');
     let user = null;

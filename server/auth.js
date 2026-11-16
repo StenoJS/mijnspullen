@@ -87,6 +87,7 @@ function loginAllowed(key) {
   return f.count < 10;
 }
 function loginFailed(key) {
+  if (fails.size > 10000) for (const [k, f] of fails) if (Date.now() - f.first > 15 * 60e3) fails.delete(k);
   const f = fails.get(key);
   if (!f || Date.now() - f.first > 15 * 60e3) fails.set(key, { count: 1, first: Date.now() });
   else f.count++;
