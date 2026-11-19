@@ -163,14 +163,9 @@ function bulkBar(redraw) {
   return bar;
 }
 async function pickTag() {
-  if (!S.tags.length) { toast('Maak eerst een tag aan (tabblad Tags)', true); return null; }
-  return openDialog((close) => {
-    const remove = h('input', { type: 'checkbox' });
-    return h('div', { class: 'dlg' }, h('h2', {}, 'Welke tag?'),
-      h('div', { class: 'chips' }, tagsFlat().map((g) => h('button', { class: 'chip', onclick: () => close({ id: g.id, remove: remove.checked }) }, h('span', { class: 'dot', style: `background:${g.color}` }), g.name))),
-      h('label', { class: 'check' }, remove, 'Tag juist weghalen'),
-      h('div', { class: 'dlg-actions' }, h('button', { class: 'btn', onclick: () => close(null) }, 'Annuleren')));
-  });
+  const remove = h('input', { type: 'checkbox' });
+  const t = await tagPicker({ multi: false, title: 'Welke tag?', footer: h('label', { class: 'check' }, remove, 'Tag juist weghalen') });
+  return t ? { id: t.id, remove: remove.checked } : null;
 }
 
 // ============ rijen ============
@@ -322,6 +317,17 @@ function addDialog(parent) {
 }
 
 // ============ zoeken ============
+// Tagfilter: de actieve tag, de 3 meest gebruikte hoofdtags en "Alle tags…" met zoeken (geen muur van chips).
+function tagFilterChips(state, chip, redraw) {
+  const active = state.tag ? tagById(Number(state.tag)) : null;
+  const top = S.tags.filter((t) => !t.parent_id).sort((a, b) => (b.use_count || 0) - (a.use_count || 0)).slice(0, 3).filter((t) => !active || t.id !== active.id);
+  return [
+    active && h('button', { class: 'chip on', title: 'Filter weghalen', onclick: () => { state.tag = ''; redraw(); } }, h('span', { class: 'dot', style: `background:${active.color}` }), tagPath(active), ' ×'),
+    top.map((t) => chip(t.name, false, () => { state.tag = String(t.id); }, t.color)),
+    S.tags.length > top.length + (active ? 1 : 0) && h('button', { class: 'chip', onclick: async () => { const t = await tagPicker({ multi: false, title: 'Filter op tag' }); if (t) { state.tag = String(t.id); redraw(); } } }, icon('tag'), 'Alle tags…'),
+  ];
+}
+
 async function viewSearch(q, token) {
   const state = { q: q.q || '', low: q.low === '1', expiring: q.expiring || '', favourite: q.favourite === '1', tag: q.tag || '', lent: q.lent === '1' };
   const barBox = h('div');
@@ -353,7 +359,7 @@ async function viewSearch(q, token) {
       chip('Verloopt ≤ 30 d', state.expiring === '30', () => { state.expiring = state.expiring === '30' ? '' : '30'; }),
       chip('★ Favoriet', state.favourite, () => { state.favourite = !state.favourite; }),
       chip('Uitgeleend', state.lent, () => { state.lent = !state.lent; }),
-      tagsFlat().map((t) => chip(t.name, state.tag === String(t.id), () => { state.tag = state.tag === String(t.id) ? '' : String(t.id); }, t.color))));
+      tagFilterChips(state, chip, () => { drawChips(); run().catch((e) => toast(e.message, true)); })));
   };
   input.addEventListener('input', debounce(() => { state.q = input.value.trim(); run().catch((e) => toast(e.message, true)); }, 250));
   main.append(h('div', { class: 'search' }, icon('search'), input), chipBox, results, barBox);
@@ -610,11 +616,31 @@ async function viewThing(id, q, token) {
   if (f.is_container) itemOnly.forEach((el) => { el.style.display = 'none'; });
 
   // tags
-  const tagBox = h('div', { class: 'chips' });
-  const drawTags = () => tagBox.replaceChildren(...flat(
-    tagsFlat().map((g) => h('button', { type: 'button', class: 'chip' + (f.tag_ids.includes(g.id) ? ' on' : ''), style: g.depth ? `margin-left:${g.depth * 10}px` : '', onclick: () => { f.tag_ids = f.tag_ids.includes(g.id) ? f.tag_ids.filter((x) => x !== g.id) : [...f.tag_ids, g.id]; dirty = true; drawTags(); } }, h('span', { class: 'dot', style: `background:${g.color}` }), g.name)),
-    h('button', { type: 'button', class: 'chip', onclick: async () => { const nid = await tagDialog(); if (nid) { f.tag_ids.push(nid); dirty = true; drawTags(); } } }, icon('plus'), 'Nieuwe tag')));
+  // Gekozen tags als compacte chips; daaronder een paar slimme suggesties (wat er op dezelfde plek
+  // vaak op zit, anders de meest gebruikte) en één knop naar de doorzoekbare kiezer.
+  const tagBox = h('div', { class: 'tagfield' });
+  let suggestPool = [];
+  const setTags = (ids) => { f.tag_ids = ids; dirty = true; drawTags(); };
+  const drawTags = () => {
+    const sel = f.tag_ids.map(tagById).filter(Boolean);
+    const sugg = [...suggestPool, ...[...S.tags].sort((a, b) => (b.use_count || 0) - (a.use_count || 0)).map((g) => g.id)]
+      .filter((id, i, a) => a.indexOf(id) === i && !f.tag_ids.includes(id)).map(tagById).filter(Boolean).slice(0, 4);
+    tagBox.replaceChildren(...flat(
+      h('div', { class: 'chips', style: 'margin:0' },
+        sel.map((g) => h('button', { type: 'button', class: 'tagchip', style: `background:${g.color};color:${textOn(g.color)}`, title: `${tagPath(g)} weghalen`, onclick: () => setTags(f.tag_ids.filter((x) => x !== g.id)) }, g.name, h('span', { class: 'x' }, '×'))),
+        h('button', { type: 'button', class: 'chip', onclick: async () => { const ids = await tagPicker({ selected: f.tag_ids, title: 'Tags kiezen' }); if (ids) setTags(ids); } }, icon(sel.length ? 'tag' : 'plus'), sel.length ? 'Wijzigen' : 'Tags kiezen')),
+      sugg.length && h('div', { class: 'tag-sugg' }, h('span', {}, 'Snel:'),
+        sugg.map((g) => h('button', { type: 'button', class: 'chip sm', onclick: () => setTags([...f.tag_ids, g.id]) }, h('span', { class: 'dot', style: `background:${g.color}` }), g.name)))));
+  };
   drawTags();
+  if (f.parent_id) {
+    api('GET', `/api/things?parent=${f.parent_id}`).then((r) => {
+      const cnt = new Map();
+      for (const x of r.things) if (x.id !== f.id) for (const id of x.tag_ids) cnt.set(id, (cnt.get(id) || 0) + 1);
+      suggestPool = [...cnt.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+      drawTags();
+    }).catch(() => {});
+  }
 
   // foto's
   const photoBox = h('div', { class: 'photos' });
@@ -1195,10 +1221,115 @@ async function viewLabels(id, q, token) {
   await load();
 }
 
-// ============ tags ============
-async function tagDialog(existing) {
+// ============ tag-kiezer ============
+// Doorzoekbare kiezer: hoofdtags op gebruik gesorteerd, subtags ingeklapt eronder, gekozen tags bovenaan.
+// multi: geeft een array met tag-id's terug (of undefined bij annuleren); anders één tag-object.
+function tagPath(t) {
+  const names = [t.name]; let p = t.parent_id ? tagById(t.parent_id) : null; const seen = new Set();
+  while (p && !seen.has(p.id)) { seen.add(p.id); names.unshift(p.name); p = p.parent_id ? tagById(p.parent_id) : null; }
+  return names.join(' › ');
+}
+function tagChip(g, extra = {}) {
+  return h('span', { class: 'tagchip', style: `background:${g.color};color:${textOn(g.color)}`, ...extra }, g.name);
+}
+async function tagPicker({ selected = [], multi = true, title = 'Tags', footer = null } = {}) {
   return openDialog((close) => {
-    const name = h('input', { value: existing ? existing.name : '', required: true, maxlength: 60, placeholder: 'bijv. Elektronica' });
+    const chosen = new Set(selected);
+    const open = new Set(); // uitgeklapte hoofdtags
+    const byUse = (a, b) => (b.use_count || 0) - (a.use_count || 0) || a.name.localeCompare(b.name, 'nl');
+    const kids = (pid) => S.tags.filter((t) => (t.parent_id || null) === pid).sort(byUse);
+    const known = new Set(S.tags.map((t) => t.id));
+    const roots = S.tags.filter((t) => !t.parent_id || !known.has(t.parent_id)).sort(byUse);
+    const hasChosenBelow = (t) => kids(t.id).some((k) => chosen.has(k.id) || hasChosenBelow(k));
+    S.tags.forEach((t) => { if (hasChosenBelow(t)) open.add(t.id); });
+
+    const input = h('input', { type: 'search', placeholder: 'Zoek of maak een tag…', 'aria-label': 'Zoek tag', autocomplete: 'off' });
+    const chosenBox = h('div', { class: 'tp-chosen' });
+    const list = h('div', { class: 'dlg-scroll tp-list' });
+
+    const pick = (t) => {
+      if (!multi) { close(t); return; }
+      if (chosen.has(t.id)) chosen.delete(t.id); else chosen.add(t.id);
+      draw();
+    };
+    const row = (t, depth, label) => {
+      const sub = kids(t.id);
+      const on = chosen.has(t.id);
+      return h('div', { class: 'pick-row', style: depth ? `padding-left:${depth * 22}px` : '' },
+        h('button', { type: 'button', class: 'pick' + (on ? ' cur' : ''), onclick: () => pick(t) },
+          multi && h('span', { class: 'tp-check' + (on ? ' on' : '') }, on ? icon('check') : null),
+          h('span', { class: 'dot', style: `background:${t.color}` }),
+          h('span', { class: 'pick-name' }, label || t.name),
+          h('small', {}, String(t.use_count || 0))),
+        !label && sub.length
+          ? h('button', { type: 'button', class: 'tree-tg', 'aria-label': open.has(t.id) ? 'Inklappen' : 'Uitklappen', onclick: () => { if (open.has(t.id)) open.delete(t.id); else open.add(t.id); draw(); } }, open.has(t.id) ? '−' : '+')
+          : h('span', { class: 'tree-tg' }));
+    };
+    const tree = (t, depth, out) => { out.push(row(t, depth)); if (open.has(t.id)) kids(t.id).forEach((k) => tree(k, depth + 1, out)); return out; };
+
+    const draw = () => {
+      const q = input.value.trim().toLowerCase();
+      if (multi) {
+        const sel = [...chosen].map(tagById).filter(Boolean);
+        chosenBox.replaceChildren(...(sel.length
+          ? sel.map((g) => tagChip(g, { role: 'button', tabindex: '0', title: 'Weghalen', onclick: () => { chosen.delete(g.id); draw(); } }, ))
+          : [h('span', { class: 'meta', style: 'margin:0' }, 'Nog geen tags gekozen')]));
+        chosenBox.querySelectorAll('.tagchip').forEach((c) => c.append(h('span', { class: 'x' }, '×')));
+      }
+      let rows;
+      if (q) {
+        const hits = S.tags.filter((t) => tagPath(t).toLowerCase().includes(q))
+          .sort((a, b) => (b.name.toLowerCase().startsWith(q) - a.name.toLowerCase().startsWith(q)) || byUse(a, b));
+        rows = hits.map((t) => row(t, 0, t.parent_id ? tagPath(t) : null));
+        if (!S.tags.some((t) => t.name.toLowerCase() === q)) {
+          rows.push(h('button', { type: 'button', class: 'pick tp-new', onclick: () => create(input.value.trim()) }, icon('plus'), h('span', { class: 'pick-name' }, `Nieuwe tag "${input.value.trim()}"`)));
+        }
+        if (!hits.length && rows.length === 1) rows.unshift(h('div', { class: 'meta', style: 'margin:4px 10px' }, 'Geen tag gevonden.'));
+      } else {
+        rows = roots.flatMap((t) => tree(t, 0, []));
+        if (!rows.length) rows = [h('div', { class: 'meta', style: 'margin:4px 10px' }, 'Nog geen tags. Typ een naam om er een te maken.')];
+      }
+      list.replaceChildren(...rows);
+    };
+    const create = async (name) => {
+      const nid = await tagDialog(null, { name });
+      if (!nid) return;
+      const t = tagById(nid);
+      if (!multi) { close(t); return; }
+      chosen.add(nid); input.value = '';
+      roots.splice(0, roots.length, ...S.tags.filter((x) => !x.parent_id || !S.tags.some((y) => y.id === x.parent_id)).sort(byUse));
+      if (t && t.parent_id) open.add(t.parent_id);
+      draw(); input.focus();
+    };
+    input.addEventListener('input', draw);
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const q = input.value.trim().toLowerCase();
+      if (!q) { if (multi) close([...chosen]); return; }
+      const exact = S.tags.find((t) => t.name.toLowerCase() === q);
+      const hits = S.tags.filter((t) => tagPath(t).toLowerCase().includes(q));
+      const t = exact || (hits.length === 1 ? hits[0] : null);
+      if (t) { pick(t); if (multi) { input.value = ''; draw(); } } else if (!hits.length) create(input.value.trim());
+    });
+    draw();
+    setTimeout(() => input.focus(), 30);
+    return h('div', { class: 'dlg' },
+      h('h2', {}, title),
+      multi && chosenBox,
+      h('div', { class: 'search' }, icon('search'), input),
+      list,
+      footer,
+      h('div', { class: 'dlg-actions' },
+        h('button', { type: 'button', class: 'btn', onclick: () => close(undefined) }, 'Annuleren'),
+        multi && h('button', { type: 'button', class: 'btn primary', onclick: () => close([...chosen]) }, 'Klaar')));
+  });
+}
+
+// ============ tags ============
+async function tagDialog(existing, preset = {}) {
+  return openDialog((close) => {
+    const name = h('input', { value: existing ? existing.name : (preset.name || ''), required: true, maxlength: 60, placeholder: 'bijv. Elektronica' });
     const color = h('input', { type: 'color', value: existing ? existing.color : '#0f766e', style: 'height:44px;padding:4px' });
     const parent = h('select', {}, h('option', { value: '' }, '— geen (hoofdtag) —'),
       tagsFlat().filter((t) => !existing || t.id !== existing.id).map((t) => h('option', { value: t.id, selected: existing && existing.parent_id === t.id }, ' '.repeat(t.depth * 3) + t.name)));
