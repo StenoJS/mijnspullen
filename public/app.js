@@ -215,17 +215,108 @@ function thingRow(t, { showPath } = {}) {
   row.addEventListener('pointermove', (e) => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
   ['pointerup', 'pointercancel', 'pointerleave'].forEach((ev) => row.addEventListener(ev, cancel));
   row.addEventListener('contextmenu', (e) => { if (sel.redraw) e.preventDefault(); });
+  let out = null;
   if (!t.is_container && !sel.on) {
-    const out = h('output', {}, num(t.quantity));
+    out = h('output', {}, num(t.quantity));
     const adj = (delta) => async (e) => {
       e.stopPropagation();
-      try { const r = await api('POST', `/api/things/${t.id}/adjust`, { delta }); out.textContent = num(r.thing.quantity); }
+      try { const r = await api('POST', `/api/things/${t.id}/adjust`, { delta }); t.quantity = r.thing.quantity; out.textContent = num(r.thing.quantity); }
       catch (ex) { toast(ex.message, true); }
     };
     row.append(h('div', { class: 'qty', onclick: (e) => e.stopPropagation() },
       h('button', { 'aria-label': 'Minder', onclick: adj(-1) }, icon('minus')), out, h('button', { 'aria-label': 'Meer', onclick: adj(1) }, icon('plus'))));
   }
-  return row;
+  return sel.on ? row : swipeRow(t, row, out);
+}
+
+// Naar links vegen over een rij onthult twee knoppen: "Op 0" (alleen spullen, geen dozen) en "Verwijderen".
+// Er staat er altijd maar één open; tikken ergens anders klapt hem weer dicht.
+let closeOpenSwipe = null;
+document.addEventListener('pointerdown', (e) => { if (closeOpenSwipe && !e.target.closest('.swipe.open')) closeOpenSwipe(); }, true);
+function swipeRow(t, row, out) {
+  const act = (fn) => (e) => { e.stopPropagation(); close(); fn(); };
+  const acts = h('div', { class: 'swipe-acts' },
+    !t.is_container && h('button', { class: 'swipe-btn zero', type: 'button', onclick: act(setZero) }, icon('minus'), h('span', {}, 'Op 0')),
+    h('button', { class: 'swipe-btn del', type: 'button', onclick: act(remove) }, icon('trash'), h('span', {}, 'Verwijderen')));
+  const wrap = h('div', { class: 'swipe' }, acts, row);
+  const width = () => acts.offsetWidth || 1;
+  const setX = (x, animate) => { row.style.transition = animate ? '' : 'none'; row.style.transform = x ? `translateX(${x}px)` : ''; };
+  function close() {
+    wrap.classList.remove('open', 'moving'); setX(0, true);
+    if (closeOpenSwipe === close) closeOpenSwipe = null;
+  }
+  function open() {
+    if (closeOpenSwipe && closeOpenSwipe !== close) closeOpenSwipe();
+    wrap.classList.add('open'); wrap.classList.remove('moving'); setX(-width(), true);
+    closeOpenSwipe = close;
+  }
+  let pid = null, x0 = 0, y0 = 0, base = 0, cur = 0, drag = false, decided = false, swallow = false;
+  row.style.touchAction = 'pan-y';
+  row.addEventListener('pointerdown', (e) => {
+    swallow = false;
+    if (sel.on || e.button > 0 || e.target.closest('button')) return;
+    pid = e.pointerId; x0 = e.clientX; y0 = e.clientY; drag = false; decided = false;
+    base = cur = wrap.classList.contains('open') ? -width() : 0;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pid) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if (!decided) {
+      if (Math.hypot(dx, dy) < 10) return;
+      decided = true; drag = Math.abs(dx) > Math.abs(dy) * 1.2;
+      if (!drag) { pid = null; return; }
+      try { row.setPointerCapture(pid); } catch {}
+      wrap.classList.add('moving');
+    }
+    cur = Math.min(0, Math.max(-width() - 48, base + dx));
+    setX(cur, false);
+  });
+  const end = (e) => {
+    if (e.pointerId !== pid) return;
+    pid = null;
+    if (!drag) return;
+    drag = false; swallow = true;
+    if (e.type === 'pointercancel') return base ? open() : close();
+    const w = width();
+    if (base ? cur < -w * 0.65 : cur < -w * 0.35) open(); else close();
+  };
+  row.addEventListener('pointerup', end);
+  row.addEventListener('pointercancel', end);
+  // Klik na het vegen niet als "openen" zien; een tik op een open rij klapt hem eerst dicht.
+  row.addEventListener('click', (e) => {
+    if (!swallow && !wrap.classList.contains('open')) return;
+    e.stopImmediatePropagation(); e.preventDefault();
+    if (swallow) swallow = false; else close();
+  }, true);
+
+  async function setZero() {
+    const old = t.quantity;
+    if (!old) { toast(`"${t.name}" staat al op 0`); return; }
+    try {
+      const r = await api('POST', `/api/things/${t.id}/adjust`, { delta: -old });
+      t.quantity = r.thing.quantity; if (out) out.textContent = num(t.quantity);
+      toast(`"${t.name}" op 0 gezet`, false, { label: 'Ongedaan maken', fn: async () => {
+        try { const x = await api('POST', `/api/things/${t.id}/adjust`, { delta: old }); t.quantity = x.thing.quantity; if (out) out.textContent = num(t.quantity); refresh && refresh(); }
+        catch (ex) { toast(ex.message, true); }
+      } });
+      refresh && refresh();
+    } catch (ex) { toast(ex.message, true); }
+  }
+  async function remove() {
+    const kids = t.child_count;
+    if (t.is_container && kids && !await confirmDialog(`"${t.name}" verwijderen?`, `Alles wat erin zit gaat mee (${kids} direct onderdeel${kids === 1 ? '' : 'en'} en dieper). Je kunt het 30 dagen terugzetten vanuit de prullenbak.`)) return;
+    try {
+      const r = await api('DELETE', `/api/things/${t.id}`);
+      wrap.classList.add('gone');
+      setTimeout(() => wrap.remove(), 220);
+      toast(`"${t.name}" naar de prullenbak`, false, { label: 'Ongedaan maken', fn: async () => {
+        try { await api('POST', `/api/trash/${r.trash_id}/restore`); toast('Teruggezet'); refresh && refresh(); }
+        catch (ex) { toast(ex.message, true); }
+      } });
+      refresh && refresh();
+    } catch (ex) { toast(ex.message, true); }
+  }
+  return wrap;
 }
 
 // ============ bladeren ============
@@ -620,7 +711,19 @@ async function viewThing(id, q, token) {
   // vaak op zit, anders de meest gebruikte) en één knop naar de doorzoekbare kiezer.
   const tagBox = h('div', { class: 'tagfield' });
   let suggestPool = [];
-  const setTags = (ids) => { f.tag_ids = ids; dirty = true; drawTags(); };
+  // Bestaand item: een tag erbij of eraf slaat meteen op (los van de rest van het formulier).
+  const setTags = async (ids) => {
+    const prev = f.tag_ids;
+    f.tag_ids = ids; drawTags();
+    if (isNew) { dirty = true; return; }
+    try {
+      const r = await api('PATCH', `/api/things/${id}`, { tag_ids: ids });
+      // Alleen onze eigen wijziging? Dan blijft een latere "Opslaan" zonder conflict; anders merkt die het conflict gewoon op.
+      if (r.thing.version === t.version + 1) t.version = r.thing.version;
+      t.tag_ids = r.thing.tag_ids;
+      toast('Tags opgeslagen');
+    } catch (ex) { f.tag_ids = prev; drawTags(); toast(ex.message, true); }
+  };
   const drawTags = () => {
     const sel = f.tag_ids.map(tagById).filter(Boolean);
     const sugg = [...suggestPool, ...[...S.tags].sort((a, b) => (b.use_count || 0) - (a.use_count || 0)).map((g) => g.id)]
