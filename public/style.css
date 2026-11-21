@@ -90,6 +90,16 @@ main { flex: 1; padding: 4px 16px 110px; }
 .qty { display: flex; align-items: center; gap: 2px; flex: none; }
 .qty button { width: 34px; height: 34px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; display: grid; place-items: center; }
 .qty output { min-width: 28px; text-align: center; font-weight: 700; }
+/* vegen over een rij: knoppen eronder */
+.swipe { position: relative; border-radius: var(--radius); overflow: hidden; transition: opacity .2s, transform .2s; }
+.swipe > .row { position: relative; z-index: 1; transition: transform .18s ease-out; }
+.swipe-acts { position: absolute; inset: 0 0 0 auto; display: flex; border-radius: var(--radius); overflow: hidden; }
+.swipe:not(.open):not(.moving) .swipe-acts { visibility: hidden; }
+.swipe-btn { width: 78px; border: 0; color: #fff; font: inherit; font-size: .74rem; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; padding: 0 4px; }
+.swipe-btn svg { width: 20px; height: 20px; }
+.swipe-btn.zero { background: #b26a00; }
+.swipe-btn.del { background: #c0392b; }
+.swipe.gone { opacity: 0; transform: translateX(-30%); pointer-events: none; }
 .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
 .empty .btn { margin-top: 12px; }
 .section-title { font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 20px 0 8px; }
