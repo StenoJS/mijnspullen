@@ -273,6 +273,27 @@ function thingRow(t, { showPath } = {}) {
   return sel.on ? row : swipeRow(t, row, out);
 }
 
+// Zoekresultaten: items met dezelfde naam op verschillende plekken (bv. Jazz Club 2x in doos A, 1x in doos B)
+// komen bij elkaar onder een kopje met het totaal. Elke rij toont zelf de plek en het aantal.
+function resultRows(things) {
+  const key = (t) => t.name.trim().toLowerCase();
+  const groups = new Map();
+  for (const t of things) if (!t.is_container) { const k = key(t); groups.set(k, [...(groups.get(k) || []), t]); }
+  const out = [], done = new Set();
+  for (const t of things) {
+    const g = !t.is_container && groups.get(key(t));
+    if (!g || g.length < 2) { out.push(thingRow(t, { showPath: true })); continue; }
+    if (done.has(key(t))) continue;
+    done.add(key(t));
+    const total = g.reduce((s, x) => s + (Number(x.quantity) || 0), 0);
+    const places = new Set(g.map((x) => x.parent_id || 0)).size;
+    out.push(h('div', { class: 'same-group' },
+      h('div', { class: 'same-head' }, h('b', {}, g[0].name), ` · ${num(total)} in totaal`, places > 1 ? ` op ${places} plekken` : ` (${g.length}x)`),
+      g.map((x) => thingRow(x, { showPath: true }))));
+  }
+  return out;
+}
+
 // Naar links vegen over een rij onthult twee knoppen: "Op 0" (alleen spullen, geen dozen) en "Verwijderen".
 // Er staat er altijd maar één open; tikken ergens anders klapt hem weer dicht.
 let closeOpenSwipe = null;
@@ -406,7 +427,7 @@ async function viewBrowse(id, token) {
       if (!homeQ) return;
       const r = await api('GET', `/api/things?q=${encodeURIComponent(homeQ)}&sort=name`).catch(() => null);
       if (!r || stale(token) || homeQ !== value.trim()) return;
-      resultsBox.replaceChildren(...(r.things.length ? r.things.slice(0, 100).map((t) => thingRow(t, { showPath: true })) : [h('div', { class: 'empty' }, 'Niets gevonden.')]));
+      resultsBox.replaceChildren(...(r.things.length ? resultRows(r.things.slice(0, 100)) : [h('div', { class: 'empty' }, 'Niets gevonden.')]));
     };
     const browseStart = main.children.length;
     if (favOnly) main.append(h('div', { class: 'filter-note' }, icon('star'), h('span', {}, list.things.length ? `Alleen favorieten${c ? ` in ${c.name}` : ''}` : 'Nog geen favorieten hier. Zet bij een item "Favoriet" aan.'), h('button', { class: 'btn sm ghost', onclick: () => { favOnly = false; load(); } }, 'Alles tonen')));
@@ -486,7 +507,7 @@ async function viewSearch(q, token) {
     p.set('sort', state.expiring ? 'expires' : 'name');
     const r = await api('GET', '/api/things?' + p);
     if (stale(token)) return;
-    results.replaceChildren(...(r.things.length ? r.things.map((t) => thingRow(t, { showPath: true })) : [h('div', { class: 'empty' }, 'Niets gevonden.')]));
+    results.replaceChildren(...(r.things.length ? resultRows(r.things) : [h('div', { class: 'empty' }, 'Niets gevonden.')]));
   };
   const drawChips = () => {
     const chip = (label, on, fn, dot) => h('button', { class: 'chip' + (on ? ' on' : ''), onclick: () => { fn(); drawChips(); run().catch((e) => toast(e.message, true)); } }, dot && h('span', { class: 'dot', style: `background:${dot}` }), label);

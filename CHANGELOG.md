@@ -8,6 +8,9 @@ Alle versies van Mijn Spullen, nieuwste bovenaan. Hoe je de app gebruikt staat i
   terugpijl bovenin), dan sta je weer waar je was, bijvoorbeeld halverwege een lange lijst of zoekresultaten. Ook na
   opslaan of verwijderen van een item kom je terug op je plek in de container. Een nieuwe pagina begint gewoon bovenaan.
 - Live-updates en acties in een lijst (veeg *Op 0*, favorieten, selecteren) springen niet meer naar boven.
+- **Zelfde naam, meerdere dozen.** Bij zoeken (ook live zoeken op het startscherm) komen items met dezelfde naam bij
+  elkaar onder een kopje met het totaal, bijvoorbeeld *Jazz Club · 3 in totaal op 2 plekken*. Elke rij toont nog
+  zijn eigen doos en aantal. Eén item met meerdere plekken komt in 1.1.
 - "Onderdelen" heet nu overal **items** (bij containers, verwijderen, prullenbak en dubbelen). Alleen bij Lego-sets
   blijft het "onderdelen", omdat het daar om steentjes gaat.
 
