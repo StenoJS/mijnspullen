@@ -1,4 +1,4 @@
-# Mijn Spullen — 0.9.3
+# Mijn Spullen — 0.10.0 (release candidate voor 1.0)
 
 Zelf gehoste, multiuser inventaris-app: weet waar al je spullen liggen. Webapp (PWA, installeerbaar op je telefoon)
 met een eigen server en database. Geen cloud van derden, **geen npm-dependencies**.
@@ -6,111 +6,22 @@ met een eigen server en database. Geen cloud van derden, **geen npm-dependencies
 Functionele inspiratie: de Android-app *Find my stuff* (geneste containers, tags, aantallen met drempel,
 houdbaarheidsdatums, barcode/QR, foto's). Er is geen code of materiaal uit die app overgenomen.
 
-## Wat zit er in 0.1 alpha
+## Wat kan het
 
-- Inloggen met gebruikersaccounts (eerste account = beheerder; beheerder voegt anderen toe, blokkeert, reset wachtwoorden)
-- Eén gedeelde inventaris voor iedereen, **live bijgewerkt** bij wijzigingen van anderen (SSE)
-- Onbeperkt geneste containers (huis → kamer → kast → doos) met items erin
-- Items: naam, aantal (+/− direct in de lijst), "bijna op"-drempel, prijs, houdbaar tot, barcode/QR, omschrijving, notities, favoriet
-- Tags met hiërarchie en kleur; filteren op een tag neemt subtags mee
-- Zoeken (woorden in naam/omschrijving/notities/barcode/tag) + filters: bijna op, verloopt binnen 30 dagen, favoriet, tag
-- Barcode/QR scannen met de camera (browser `BarcodeDetector`, handmatige invoer als terugval)
-- Tot 10 foto's per item, in de browser verkleind (max 1600 px) + thumbnail
-- Verplaatsen van items/containers, cascade-verwijderen (met bevestiging)
-- Conflictdetectie bij gelijktijdig bewerken (versienummer per item)
-- Activiteitenlog, CSV-export, donker thema (volgt systeem)
+Containers onbeperkt nesten (huis → kamer → kast → doos), items met aantal, drempel, prijs, houdbaarheid, barcode,
+foto's en tags, live bijgewerkt voor iedereen in huis. Verder: scannen (barcode/QR), NFC-tags, QR-labels printen,
+Open Food Facts, Lego-sets op nummer, fotoherkenning via Home Assistant, prullenbak, uitlenen, boodschappenlijst,
+dubbelen opruimen, imports (CSV, dozenlijst, Find my stuff-back-up) en dagelijkse back-ups.
 
-### Nieuw in 0.8
-
-- **Dozenlijst importeren** (*Meer → Dozenlijst importeren*): een .ods- of .csv-sheet met per regel een doosnummer en in
-  de cellen ernaast de inhoud. Bestaande dozen ("Box 101", "Doos 101") en spullen worden herkend (Lego op setnummer, de
-  rest op naam), dus alleen wat ontbreekt staat aangevinkt; wat al op een andere plek staat wordt gemeld maar niet
-  aangevinkt. Lego-setnummers krijgen naam, thema, tag en foto. Er wordt vooraf een back-up gemaakt.
-- Dozen heten consequent **"Doos 101"** (0.8.1): bestaande "101" en "Box 101" worden eenmalig hernoemd en dubbele
-  dozen met hetzelfde nummer op dezelfde plek samengevoegd (back-up vooraf).
-- 0.8.2: **ster** in de bovenbalk toont alleen favorieten (in de huidige plek en alles eronder); bij bewerken staat
-  **Opslaan** ook rechtsboven; Omschrijving staat direct onder Naam; "Boodschappen" heet nu **Lijst**; de tegels op
-  het startscherm passen op een smalle telefoon.
-- 0.8.3: **avatar** per gebruiker: een gekleurd rondje met je eerste letter, of een eigen foto (*Meer → tik op je
-  rondje*). Zichtbaar bij Gebruikers en in de activiteit.
-- 0.8.4: lange namen lopen door op een tweede regel in plaats van af te kappen; in een doos of kamer staat de titel
-  onder de knoppen in de bovenbalk.
-- 0.8.5: avatars in de activiteit kloppen weer voor elke regel; lange geplakte teksten worden afgebroken en in de
-  activiteit ingekort.
-- 0.8.6: **live zoeken** op het startscherm (resultaten verschijnen tijdens het typen); bij "Kies een locatie" is de
-  boom ingeklapt met een **+** per plek (de weg naar de huidige plek staat open) en kun je bovenin op naam filteren.
-- 0.8.7: **lang indrukken** op een ding of doos zet selecteren aan met dat ding al aangevinkt (naast het vinkjes-icoon).
-- 0.8.8: vink je het laatste geselecteerde ding uit, dan gaat selecteren vanzelf weer uit.
-- 0.9.0: **onderhoud na code review**: id's van spullen en foto's worden nooit hergebruikt (een oud QR-label of NFC-tag wijst niet meer naar iets nieuws, geen verkeerde foto uit de cache; vóór de omzetting wordt automatisch een back-up gemaakt), houdbaarheid rekent met de lokale datum, losse back-ups (imports, samenvoegen) drukken de dagelijkse niet meer weg, de volledige back-up bevat ook foto's uit de prullenbak, een mislukte barcode-opzoeking wordt niet meer onthouden, en een paar ongeldige verzoeken geven een nette melding in plaats van "Interne fout".
-- 0.9.1: tags met een lichte kleur (geel, lichtblauw…) krijgen donkere tekst, zodat ze leesbaar zijn.
-- 0.9.3: in de lijst kun je een ding naar links vegen voor twee snelle knoppen: **Op 0** (aantal op nul, bijvoorbeeld als iets op is) en **Verwijderen** (naar de prullenbak). Beide met "Ongedaan maken" in de melding; een doos met inhoud vraagt eerst om bevestiging.
-- 0.9.2: tags kiezen is overzichtelijk: alleen gekozen tags staan bij een item, met een paar slimme suggesties (wat er op dezelfde plek vaak op zit) en een doorzoekbare kiezer waarin subtags onder hun hoofdtag ingeklapt staan en de meest gebruikte bovenaan. Ook het tagfilter bij Zoeken en de bulk-tagknop gebruiken die kiezer.
-
-### Nieuw in 0.7
-
-- **Lego-sets op nummer**: typ een setnummer als naam (bijv. `31077` of `Lego 60050`) en tik "Lego-set opzoeken": naam,
-  omschrijving (thema, jaar, aantal onderdelen), de tag Lego en een foto worden ingevuld. *Meer → Lego-sets aanvullen* doet
-  dit in één keer voor alle bestaande spullen met alleen een nummer als naam. Bron: de gratis database-download van
-  [Rebrickable](https://rebrickable.com) (geen account nodig), maandelijks ververst in `/data/lego`.
-
-### Nieuw in 0.6
-
-- **Doos met inhoud fotograferen** (*Toevoegen → Foto van een open doos of la (AI)*): de AI stelt een naam voor de
-  doos en een lijst met alles wat erin zit voor. Vink af wat niet klopt, pas namen/aantallen aan en sla op: de
-  container (met de foto) en de items worden in één keer aangemaakt. Vanuit een container kun je ook kiezen om de
-  spullen direct daarin te zetten.
-- Fotoherkenning probeert het bij drukte bij Google zelf opnieuw en kan uitwijken naar een tweede AI-taak (0.5.1).
-
-### Nieuw in 0.5
-
-- **Fotoherkenning (AI)**: *Toevoegen → Foto maken, AI vult in*, of de AI-knop bij de foto's van een item. De app stuurt
-  de foto naar Home Assistant (`image/upload`), laat `ai_task.generate_data` (standaard `ai_task.google_ai_task`) een
-  naam, omschrijving, tags en aantal voorstellen, en ruimt de foto in HA daarna op. Instellen: *Meer → Koppelingen →
-  Fotoherkenning*: plak een langlevend HA-token (wordt alleen op de server bewaard). HA wordt bereikt via de host van
-  `HA_WEBHOOK_URL` of `HA_URL`; `HA_TOKEN` en `HA_AI_ENTITY` mogen ook als omgevingsvariabele.
-
-### Nieuw in 0.4
-
-- **Prullenbak met ongedaan maken**: verwijderen zet een item (met inhoud, tags en foto's) 30 dagen in *Meer → Prullenbak*
-  (`TRASH_DAYS`). Direct na verwijderen staat er "Ongedaan maken" in de melding. Terugzetten gebeurt op de oude plek.
-- **Meerdere tegelijk selecteren** (knop met vinkjes in een container of bij zoeken): verplaatsen, tag geven,
-  op de boodschappenlijst zetten of verwijderen in één keer.
-- **Uitlenen**: bij een item "Uitgeleend aan" + terugbrengdatum. Badge "Bij …" in lijsten, filter *Uitgeleend*,
-  teller op het startscherm, en een Home Assistant-melding (`lend_overdue`) als de datum verstreken is.
-- **Boodschappenlijst** (*Meer → Lijst* of de tegel op het startscherm): alles wat bijna op is plus wat je
-  zelf op de lijst zet. "Gekocht" hoogt het aantal op. Delen/kopiëren, of naar Home Assistant sturen (event `shopping`).
-- **Dubbelen opruimen** (0.4.1, *Meer → Dubbelen opruimen*): vindt spullen met dezelfde naam op dezelfde plek (en items
-  met dezelfde barcode). Kies welke blijft; tags, foto's en lege velden komen mee, containers worden inclusief inhoud
-  samengevoegd en de lege kopie gaat naar de prullenbak. Beheerder: "Alles samenvoegen" (met back-up vooraf).
-- **Serie-scannen** (bij *Toevoegen → Scannen in serie*): camera blijft open, elke scan in deze container doet +1 bij
-  een bekend product of maakt een nieuw item aan (met naam en foto uit Open Food Facts).
-
-### Nieuw in 0.3
-
-- **Find my stuff-back-up importeren** (*Meer → Find my stuff importeren*, beheerder): upload het `.bckp`-bestand
-  (zip met `backup.txt` + foto's), bekijk het overzicht en importeer. Containers, items, tags (kleur benaderd),
-  barcodes, prijzen (centen → euro), houdbaarheid, aankoopdatum (in notities) en alle foto's komen mee.
-  Thumbnails worden daarna in de browser gemaakt. Zet in NPM `client_max_body_size 200m;` voor grote back-ups.
-
-### Nieuw in 0.2
-
-- **NFC-tags** (Chrome op Android, Web NFC): koppel een tag aan een item of container. De app zet de link op de tag, dus
-  tag aantikken opent het juiste item ook als de app dicht is. Alleen-lezen tags werken via de scanknop (serienummer).
-- **QR-labels printen** voor een container en alles eronder (klein/middel/groot, optioneel ook items). Scannen opent de plek.
-- **Betere scanner**: hoge resolutie, continu scherpstellen, lamp en zoom (als de telefoon dat kan), controle op het
-  EAN-controlegetal en twee gelijke lezingen voor streepjescodes (minder misreads), trilt bij succes.
-- **Product opzoeken** bij een EAN: naam, omschrijving en productfoto uit Open Food Facts / Open Products Facts.
-- **Foto's**: aparte knoppen voor camera en galerij.
-- **CSV-import** met proefrun (eigen export, of andere CSV met kolommen naam, locatie "A > B", aantal, …).
-- **Automatische back-ups**: elke nacht een kopie van de database in `/data/backups` (laatste 14), plus downloads
-  (los bestand of volledige `.tar` met foto's) onder *Meer → Back-ups*.
-- **Home Assistant**: webhook-meldingen bij "bijna op" en bij houdbaarheid (dagelijks), en `GET /api/summary` voor sensoren.
-- **API-tokens** (`Authorization: Bearer ms_…`) voor HA, scripts of een latere native app.
+- **Gebruiken:** zie [HANDLEIDING.md](HANDLEIDING.md)
+- **Wat is er veranderd:** zie [CHANGELOG.md](CHANGELOG.md)
+- **Koppelingen** (Home Assistant, AI, Rebrickable): zie [KOPPELINGEN.md](KOPPELINGEN.md)
 
 Instellingen (omgevingsvariabelen in de stack): `APP_URL`, `HA_WEBHOOK_URL`, `NOTIFY_DAYS` (7), `NOTIFY_HOUR` (8),
 `BACKUP_HOUR` (3), `BACKUP_KEEP` (14).
 
-**Nog niet:** offline gebruik, meerdere inventarissen/rechten per gebruiker, Find my stuff-specifiek importformaat.
+**Bewust niet (voor nu):** offline gebruik, meerdere gescheiden inventarissen. Iedereen met een account ziet en bewerkt
+dezelfde spullen; beheerders regelen gebruikers, back-ups, imports, koppelingen en definitief weggooien.
 
 ## Draaien in Portainer (patroon: `*.steno.nl`, netwerk `hassio`, NPM)
 
@@ -164,13 +75,62 @@ Open http://localhost:3000.
 
 ## Back-up
 
-Alles staat in het volume `mijn-spullen-data` (SQLite-bestand + map `images`). Stop de container kort en kopieer het volume:
+Automatisch: elke nacht om `BACKUP_HOUR` een kopie van de database in `/data/backups` (de laatste 14 dagelijkse,
+plus de laatste 14 losse van vóór imports en samenvoegen). Onder *Meer → Back-ups* (beheerder) download je een los
+`.db`-bestand of de **volledige `.tar`** (database + alle foto's + avatars + foto's in de prullenbak).
+
+Een los `.db`-bestand bevat géén foto's. Bewaar dus af en toe een `.tar` buiten de server.
+
+Handmatig het hele volume kopiëren kan ook:
 
 ```bash
 docker stop mijn-spullen
-docker run --rm -v mijn-spullen-data:/data -v "$PWD":/backup alpine tar czf /backup/mijn-spullen-backup-$(date +%F).tgz -C /data .
+docker run --rm -v mijn-spullen_mijn-spullen-data:/data -v "$PWD":/backup alpine tar czf /backup/mijn-spullen-backup-$(date +%F).tgz -C /data .
 docker start mijn-spullen
 ```
+
+## Back-up terugzetten
+
+Getest in 0.10 met een echte back-up in een losse testcontainer (zie CHANGELOG). Zet altijd eerst een verse back-up
+van de huidige staat opzij, dan kun je terug als het terugzetten niet bevalt.
+
+**1. Controleer de back-up** (alleen-lezen, wijzigt niets):
+
+```bash
+docker exec mijn-spullen node server/check-backup.js /data/backups/mijn-spullen-2026-11-23.db
+```
+
+`"ok": true` en minstens één beheerder? Dan is het bestand bruikbaar. Je ziet ook hoeveel spullen, tags en foto's erin zitten.
+
+**2a. Alleen de database terugzetten** (foto's op de server blijven staan):
+
+```bash
+docker stop mijn-spullen
+docker run --rm -v mijn-spullen_mijn-spullen-data:/data alpine sh -c '
+  cp /data/mijn-spullen.db /data/backups/mijn-spullen-voor-herstel.db &&
+  cp /data/backups/mijn-spullen-2026-11-23.db /data/mijn-spullen.db &&
+  rm -f /data/mijn-spullen.db-wal /data/mijn-spullen.db-shm &&
+  chown 1000:1000 /data/mijn-spullen.db'
+docker start mijn-spullen
+```
+
+Haal de `-wal`- en `-shm`-bestanden echt weg: die horen bij de oude database en kunnen de teruggezette anders beschadigen.
+
+**2b. Volledige `.tar` terugzetten** (database + foto's), met het bestand in de huidige map:
+
+```bash
+docker stop mijn-spullen
+docker run --rm -v mijn-spullen_mijn-spullen-data:/data -v "$PWD":/backup alpine sh -c '
+  mkdir -p /data/voor-herstel && mv /data/mijn-spullen.db* /data/images /data/voor-herstel/ &&
+  tar xf /backup/mijn-spullen-volledig-2026-11-23.tar -C /data && chown -R 1000:1000 /data'
+docker start mijn-spullen
+```
+
+**3. Controleer** in de containerlog dat de app opstart (`Mijn Spullen … luistert op :3000`), log in en kijk of je
+spullen en foto's er zijn. Alles goed? Dan mag `/data/voor-herstel` weg.
+
+Spullen, foto's en NFC-/QR-koppelingen houden na herstel hun oude nummers. Wachtwoorden zijn die van het moment van
+de back-up. Een back-up van een oudere versie wordt bij het opstarten vanzelf bijgewerkt naar het nieuwe schema.
 
 ## Opbouw
 
@@ -179,16 +139,16 @@ server/index.js   HTTP-server, API-routes, SSE, statische bestanden
 server/db.js      SQLite-schema + migraties (node:sqlite)
 server/auth.js    wachtwoorden (scrypt), sessies, rate limit
 public/           PWA: index.html, app.js (views), lib.js (hulpfuncties), style.css, sw.js
-test/             API-test (node --test)
+server/check-backup.js  controle van een back-up vóór het terugzetten
+test/             API- en hersteltests (node --test)
 ```
 
 Beveiliging: wachtwoorden met scrypt, sessiecookie `HttpOnly; SameSite=Lax; Secure`, CSRF-header op alle schrijfacties,
-login rate limit (10 pogingen / 15 min), strikte Content-Security-Policy, CSV-export beschermd tegen formule-injectie.
+login rate limit (10 pogingen per naam en 30 per IP-adres per 15 min, gelijke responstijd voor onbekende namen),
+foto's worden op inhoud gecontroleerd (JPEG/PNG/WebP), strikte Content-Security-Policy en `nosniff`, API-tokens alleen
+als hash opgeslagen, CSV-export beschermd tegen formule-injectie, live-updates stoppen bij uitloggen of blokkeren.
 
-## Roadmap (voorstel)
+## Op weg naar 1.0
 
-1. 0.2 — CSV-import (ook voor een FindMyStuff-export), automatische back-up naar een tweede locatie
-2. 0.3 — Herinneringen (houdbaarheid/voorraad) via Home Assistant of Telegram, labels/QR-stickers printen
-3. 0.4 — Prullenbak, bulkacties, uitlenen, boodschappenlijst, serie-scannen (klaar)
-4. 0.5 — Offline-modus met synchronisatie, telmodus, garantie/bonnetjes, rechten per gebruiker
-5. Optioneel — PostgreSQL in plaats van SQLite
+0.10 is de release candidate: een week gewoon gebruiken zonder nieuwe functies. Duiken er geen bugs op, dan wordt dit
+1.0. Nieuwe wensen (zoals een Android-app via Capacitor) komen in 1.1.

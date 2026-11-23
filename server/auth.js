@@ -18,6 +18,9 @@ function verifyPassword(password, stored) {
   return key.length === expected.length && crypto.timingSafeEqual(key, expected);
 }
 
+// Vaste hash om tegen te controleren als de gebruikersnaam niet bestaat (gelijke responstijd).
+const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
+
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 function createSession(db, userId) {
@@ -80,11 +83,11 @@ const clearCookie = (secure) => `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max
 
 // Eenvoudige rate limit tegen brute force op login.
 const fails = new Map();
-function loginAllowed(key) {
+function loginAllowed(key, max = 10) {
   const f = fails.get(key);
   if (!f) return true;
   if (Date.now() - f.first > 15 * 60e3) { fails.delete(key); return true; }
-  return f.count < 10;
+  return f.count < max;
 }
 function loginFailed(key) {
   if (fails.size > 10000) for (const [k, f] of fails) if (Date.now() - f.first > 15 * 60e3) fails.delete(k);
@@ -94,4 +97,4 @@ function loginFailed(key) {
 }
 const loginOk = (key) => fails.delete(key);
 
-module.exports = { createApiToken, hashPassword, verifyPassword, createSession, getUser, destroySession, cookieHeader, clearCookie, loginAllowed, loginFailed, loginOk, COOKIE };
+module.exports = { DUMMY_HASH, createApiToken, hashPassword, verifyPassword, createSession, getUser, destroySession, cookieHeader, clearCookie, loginAllowed, loginFailed, loginOk, COOKIE };
