@@ -280,3 +280,8 @@ svg.qr { width: 100%; height: 100%; display: block; }
   .qty button { width: 30px; height: 30px; }
   .qty output { min-width: 24px; }
 }
+
+/* zelfde naam op meerdere plekken (zoeken) */
+.same-group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px; border: 1px dashed var(--line, rgba(127,127,127,.35)); border-radius: 14px; }
+.same-head { font-size: .86rem; color: var(--muted); padding: 0 4px; }
+.same-head b { color: var(--text, inherit); }

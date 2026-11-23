@@ -2,6 +2,18 @@
 
 Alle versies van Mijn Spullen, nieuwste bovenaan. Hoe je de app gebruikt staat in [HANDLEIDING.md](HANDLEIDING.md).
 
+## 0.10.1 — kleine wensen uit de testweek (2026-11-23)
+
+- **Terug = weer op dezelfde plek.** Ga je terug naar de vorige pagina (Android-terugknop, browser-terug of de
+  terugpijl bovenin), dan sta je weer waar je was, bijvoorbeeld halverwege een lange lijst of zoekresultaten. Ook na
+  opslaan of verwijderen van een item kom je terug op je plek in de container. Een nieuwe pagina begint gewoon bovenaan.
+- Live-updates en acties in een lijst (veeg *Op 0*, favorieten, selecteren) springen niet meer naar boven.
+- **Zelfde naam, meerdere dozen.** Bij zoeken (ook live zoeken op het startscherm) komen items met dezelfde naam bij
+  elkaar onder een kopje met het totaal, bijvoorbeeld *Jazz Club · 3 in totaal op 2 plekken*. Elke rij toont nog
+  zijn eigen doos en aantal. Eén item met meerdere plekken komt in 1.1.
+- "Onderdelen" heet nu overal **items** (bij containers, verwijderen, prullenbak en dubbelen). Alleen bij Lego-sets
+  blijft het "onderdelen", omdat het daar om steentjes gaat.
+
 ## 0.10.0 — release candidate voor 1.0 (2026-11-23)
 
 Geen nieuwe functies: deze versie gaat over zekerheid. Als er een week lang geen bugs opduiken, wordt dit 1.0.
