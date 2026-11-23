@@ -104,3 +104,65 @@ test('Find my stuff-back-up importeren', async () => {
   const up3 = await call('POST', '/api/import/findmystuff', zip, 'application/zip');
   assert.equal(up3.body.already_imported, null, 'na wissen weer schoon');
 });
+
+test('Find my stuff: getallen of strings als id, kringverwijzing, doelcontainer, kapotte foto\'s en rechten', async () => {
+  const jar = { admin: '', kim: '' };
+  const as = (who) => async (method, url, body, ct) => {
+    const res = await fetch(base + url, { method, headers: { 'x-requested-with': 'mijn-spullen', cookie: jar[who], ...(ct ? { 'content-type': ct } : {}) }, body });
+    const sc = res.headers.get('set-cookie'); if (sc) jar[who] = sc.split(';')[0];
+    return { status: res.status, body: await res.json() };
+  };
+  const a = as('admin'), k = as('kim');
+  const J = (o) => JSON.stringify(o);
+  await a('POST', '/api/login', J({ username: 'steno', password: 'langgenoeg1' }), 'application/json');
+  await a('POST', '/api/users', J({ username: 'kim', password: 'ookgoed123' }), 'application/json');
+  await k('POST', '/api/login', J({ username: 'kim', password: 'ookgoed123' }), 'application/json');
+
+  const jpg = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex');
+  const backup = {
+    thingBackupList: [
+      { id: '10', name: 'Zolder', isVisuallyStorage: true },
+      { id: 11, name: 'Kerstdoos', parentId: '10', isVisuallyStorage: true },
+      { id: '12', name: 'Kerstballen', parentId: 11, quantity: '24', price: '499' },
+      { id: 13, name: 'Kip', parentId: 14 }, { id: 14, name: 'Ei', parentId: 13 }, // kring
+      { id: 15, name: 'Wees', parentId: 999 }, // ouder bestaat niet
+    ],
+    tagBackupList: [{ id: '7', name: 'Kerst', colorId: 12 }],
+    thingTagsBackupList: [{ thingId: 12, tagIds: [7] }, { thingId: '12', tagIds: ['7'] }],
+    images: [
+      { itemId: 12, uri: 'content://x/files/goed.jpg', isPrimary: true },
+      { itemId: 12, uri: 'nep.jpg' }, // geen echte JPEG
+      { itemId: 12, uri: 'bestaat-niet.jpg' },
+    ],
+  };
+  const zip = makeZip({ 'backup.txt': Buffer.from('﻿' + J(backup)), 'files/goed.jpg': jpg, 'nep.jpg': Buffer.from('<svg onload=alert(1)>') });
+
+  assert.equal((await k('POST', '/api/import/findmystuff', zip, 'application/zip')).status, 403, 'alleen de beheerder importeert');
+  const doel = (await a('POST', '/api/things', J({ name: 'Uit Find my stuff', is_container: true }), 'application/json')).body.thing;
+  const up = await a('POST', '/api/import/findmystuff', zip, 'application/zip');
+  assert.equal(up.status, 200, J(up.body));
+  assert.equal(up.body.summary.images_found, 2);
+  assert.equal((await a('POST', `/api/import/findmystuff/${up.body.token}`, J({ parent_id: 999999 }), 'application/json')).status, 400, 'doel moet bestaan');
+  const st = (await a('POST', `/api/import/findmystuff/${up.body.token}`, J({ parent_id: doel.id }), 'application/json')).body.stats;
+  assert.equal(st.created_things, 6, 'kring en wees worden niet overgeslagen');
+  assert.equal(st.imported_images, 1);
+  assert.equal(st.skipped_images, 2, 'nep-foto en ontbrekende foto overgeslagen');
+
+  const ballen = (await a('GET', '/api/things?q=kerstballen')).body.things[0];
+  assert.deepEqual(ballen.path.map((p) => p.name), ['Uit Find my stuff', 'Zolder', 'Kerstdoos']);
+  assert.equal(ballen.quantity, 24);
+  assert.equal(ballen.price, 4.99);
+  assert.equal(ballen.tag_ids.length, 1, 'tag één keer gekoppeld, ook al staat hij er dubbel in');
+  assert.equal(ballen.image_ids.length, 1);
+  const wees = (await a('GET', '/api/things?q=wees')).body.things[0];
+  assert.deepEqual(wees.path.map((p) => p.name), ['Uit Find my stuff']);
+  for (const n of ['kip', 'ei']) assert.equal((await a('GET', `/api/things?q=${n}`)).body.things.filter((t) => t.name.toLowerCase() === n).length, 1);
+  const tag = (await a('GET', '/api/tags')).body.tags.find((t) => t.name === 'Kerst');
+  assert.match(tag.color, /^#[0-9a-f]{6}$/, 'kleur-index buiten het palet geeft toch een geldige kleur');
+
+  // Ongeldige uploads geven een nette 400.
+  assert.equal((await a('POST', '/api/import/findmystuff', makeZip({ 'anders.txt': Buffer.from('x') }), 'application/zip')).status, 400);
+  assert.equal((await a('POST', '/api/import/findmystuff', makeZip({ 'backup.txt': Buffer.from('{kapot') }), 'application/zip')).status, 400);
+  assert.equal((await a('POST', '/api/import/findmystuff', makeZip({ 'backup.txt': Buffer.from(J({ thingBackupList: [] })) }), 'application/zip')).status, 400);
+  assert.equal((await a('POST', '/api/import/findmystuff/../../etc', '{}', 'application/json')).status, 404);
+});

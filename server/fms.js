@@ -117,7 +117,7 @@ function importBackup(b, ctx) {
       const mime = MIME[path.extname(im.entry).toLowerCase()];
       const buf = b.zip.read(im.entry);
       if (!buf || !buf.length || buf.length > 8 * 1024 * 1024) { stats.skipped_images++; return; }
-      ctx.storeImageFile(tid, buf, mime, pos);
+      if (ctx.storeImageFile(tid, buf, mime, pos) === false) { stats.skipped_images++; return; }
       stats.imported_images++;
     });
   }

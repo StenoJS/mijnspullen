@@ -8,7 +8,7 @@ const SOURCES = [
   'https://world.openproductsfacts.org',
 ];
 const IMAGE_HOSTS = /^((images|static)\.open(food|beauty|products|petfood)facts\.org|cdn\.rebrickable\.com)$/;
-const UA = 'MijnSpullen/0.2 (self-hosted inventory; https://github.com/StenoJS/mijnspullen)';
+const UA = `MijnSpullen/${require('../package.json').version} (self-hosted inventory; https://github.com/StenoJS/mijnspullen)`;
 const cache = new Map();
 
 async function getJson(url, ms) {
@@ -51,6 +51,14 @@ async function lookupBarcode(code) {
   return null;
 }
 
+// Echt een foto? Kijk naar de eerste bytes in plaats van alleen het Content-Type te geloven.
+function sniffImage(buf) {
+  if (!buf || buf.length < 4) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buf.length >= 12 && buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
 async function fetchImage(url, maxBytes) {
   let u;
   try { u = new URL(url); } catch { return null; }
@@ -62,9 +70,9 @@ async function fetchImage(url, maxBytes) {
     const mime = String(r.headers.get('content-type') || '').split(';')[0].trim();
     if (!r.ok || !/^image\/(jpeg|png|webp)$/.test(mime)) return null;
     const buf = Buffer.from(await r.arrayBuffer());
-    if (!buf.length || buf.length > maxBytes) return null;
+    if (!buf.length || buf.length > maxBytes || sniffImage(buf) !== mime) return null;
     return { buf, mime };
   } catch { return null; } finally { clearTimeout(t); }
 }
 
-module.exports = { lookupBarcode, fetchImage };
+module.exports = { lookupBarcode, fetchImage, sniffImage };

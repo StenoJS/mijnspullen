@@ -1,11 +1,12 @@
 'use strict';
 const http = require('node:http');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { openDb, tx } = require('./db');
 const auth = require('./auth');
 const { parseCsv, rowsToRecords } = require('./csv');
-const { lookupBarcode, fetchImage } = require('./lookup');
+const { lookupBarcode, fetchImage, sniffImage } = require('./lookup');
 const { writeTar } = require('./tar');
 const { createJobs } = require('./jobs');
 const ai = require('./ai');
@@ -23,6 +24,11 @@ const MAX_JSON = 1024 * 1024;
 const MAX_IMAGE = 8 * 1024 * 1024;
 const MAX_IMAGES_PER_THING = 10;
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+function requireImage(buf, mime) {
+  const real = sniffImage(buf);
+  if (!real || (mime && real !== mime)) throw new HttpError(415, 'Dit is geen geldige JPEG-, PNG- of WebP-foto');
+  return real;
+}
 
 const db = openDb(DATA_DIR);
 const lego = createLego(DATA_DIR);
@@ -98,9 +104,15 @@ function clientIp(req) {
 const sseClients = new Set();
 function broadcast(event) {
   const data = `data: ${JSON.stringify(event)}\n\n`;
-  for (const c of sseClients) c.write(data);
+  for (const c of sseClients) c.res.write(data);
 }
-setInterval(() => { for (const c of sseClients) c.write(': ping\n\n'); }, 25000).unref();
+// Elke ping: is de sessie nog geldig? Uitgelogd, geblokkeerd of nieuw wachtwoord: de live-verbinding sluiten.
+setInterval(() => {
+  for (const c of sseClients) {
+    if (!auth.getUser(db, c.req)) { sseClients.delete(c); c.res.end(); continue; }
+    c.res.write(': ping\n\n');
+  }
+}, 25000).unref();
 
 function logActivity(user, thingId, action, summary) {
   db.prepare('INSERT INTO activity(user_id,thing_id,action,summary,at) VALUES(?,?,?,?,?)')
@@ -408,15 +420,21 @@ route('GET', '/api/setup-status', PUBLIC, () => ({ needsSetup: db.prepare('SELEC
 route('POST', '/api/setup', PUBLIC, async ({ req, res }) => {
   if (db.prepare('SELECT COUNT(*) c FROM users').get().c > 0) throw new HttpError(403, 'Installatie is al afgerond');
   const b = await readJson(req);
+  // Opnieuw tellen ná het inlezen: twee gelijktijdige verzoeken mogen niet allebei beheerder worden.
+  if (db.prepare('SELECT COUNT(*) c FROM users').get().c > 0) throw new HttpError(403, 'Installatie is al afgerond');
   const user = createUser(b, 'admin');
   return startSession(res, user.id, user);
 });
 
+const checkPassword = (pw) => {
+  if (String(pw).length < 8) throw bad('Wachtwoord moet minimaal 8 tekens zijn');
+  if (String(pw).length > 256) throw bad('Wachtwoord mag maximaal 256 tekens zijn');
+};
 function createUser(b, role) {
   const username = str(b.username, 50).toLowerCase();
   if (!/^[a-z0-9._-]{2,50}$/.test(username)) throw bad('Gebruikersnaam: 2-50 tekens (letters, cijfers, . _ -)');
   const password = String(b.password || '');
-  if (password.length < 8) throw bad('Wachtwoord moet minimaal 8 tekens zijn');
+  checkPassword(password);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'Gebruikersnaam bestaat al');
   const display = str(b.display_name, 80) || username;
   const r = db.prepare('INSERT INTO users(username,display_name,password_hash,role,created_at) VALUES(?,?,?,?,?)')
@@ -432,11 +450,15 @@ function startSession(res, userId, user) {
 route('POST', '/api/login', PUBLIC, async ({ req, res }) => {
   const b = await readJson(req);
   const username = str(b.username, 50).toLowerCase();
-  const key = `${clientIp(req)}|${username}`;
-  if (!auth.loginAllowed(key)) throw new HttpError(429, 'Te veel pogingen. Probeer het over 15 minuten opnieuw.');
+  const ip = clientIp(req);
+  const key = `${ip}|${username}`;
+  // Per gebruikersnaam én per IP-adres (anders kan iemand gewoon steeds een andere naam proberen).
+  if (!auth.loginAllowed(key) || !auth.loginAllowed(`ip|${ip}`, 30)) throw new HttpError(429, 'Te veel pogingen. Probeer het over 15 minuten opnieuw.');
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
-  const ok = u && !u.disabled && auth.verifyPassword(String(b.password || ''), u.password_hash);
-  if (!ok) { auth.loginFailed(key); throw new HttpError(401, 'Onjuiste gebruikersnaam of wachtwoord'); }
+  // Ook bij een onbekende naam het wachtwoord laten hashen: zo verraadt de responstijd niet welke namen bestaan.
+  const pwOk = auth.verifyPassword(String(b.password || '').slice(0, 256), u ? u.password_hash : auth.DUMMY_HASH);
+  const ok = u && !u.disabled && pwOk;
+  if (!ok) { auth.loginFailed(key); auth.loginFailed(`ip|${ip}`); throw new HttpError(401, 'Onjuiste gebruikersnaam of wachtwoord'); }
   auth.loginOk(key);
   return startSession(res, u.id, u);
 });
@@ -453,6 +475,7 @@ route('PUT', '/api/me/avatar', USER, async ({ req, user }) => {
   if (String(req.headers['content-type'] || '').split(';')[0].trim() !== 'image/jpeg') throw new HttpError(415, 'Alleen JPEG');
   const buf = await readBody(req, 1024 * 1024);
   if (!buf.length) throw bad('Leeg bestand');
+  requireImage(buf, 'image/jpeg');
   fs.writeFileSync(avatarFile(user.id), buf);
   const at = now();
   db.prepare('UPDATE users SET avatar_at = ? WHERE id = ?').run(at, user.id);
@@ -475,9 +498,9 @@ route('POST', '/api/me/password', USER, async ({ req, user }) => {
   const b = await readJson(req);
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
   if (!auth.verifyPassword(String(b.current || ''), u.password_hash)) throw new HttpError(403, 'Huidig wachtwoord klopt niet');
-  if (String(b.password || '').length < 8) throw bad('Wachtwoord moet minimaal 8 tekens zijn');
+  checkPassword(b.password || '');
   db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(String(b.password)), user.id);
-  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(user.id, require('node:crypto').createHash('sha256').update(user._token).digest('hex'));
+  db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').run(user.id, crypto.createHash('sha256').update(user._token).digest('hex'));
   return { ok: true };
 });
 
@@ -498,7 +521,7 @@ route('PATCH', '/api/users/:id', ADMIN, async ({ req, params, user }) => {
       if (b.disabled) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     }
     if (b.password) {
-      if (String(b.password).length < 8) throw bad('Wachtwoord moet minimaal 8 tekens zijn');
+      checkPassword(b.password);
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(auth.hashPassword(String(b.password)), id);
       db.prepare('DELETE FROM sessions WHERE user_id = ?').run(id);
     }
@@ -590,6 +613,7 @@ route('POST', '/api/things/:id/images', USER, async ({ req, params, user }) => {
   if (db.prepare('SELECT COUNT(*) c FROM images WHERE thing_id = ?').get(thingId).c >= MAX_IMAGES_PER_THING) throw bad(`Maximaal ${MAX_IMAGES_PER_THING} foto's per item`);
   const buf = await readBody(req, MAX_IMAGE);
   if (!buf.length) throw bad('Leeg bestand');
+  requireImage(buf, mime);
   return { image: storeImage(user, thingId, buf, mime, req) };
 });
 function storeImage(user, thingId, buf, mime, req) {
@@ -655,6 +679,7 @@ route('POST', '/api/ai/contents', USER, async ({ req }) => {
   if (!IMAGE_TYPES[mime]) throw new HttpError(415, 'Alleen JPEG, PNG of WebP');
   const buf = await readBody(req, MAX_IMAGE);
   if (!buf.length) throw bad('Leeg bestand');
+  requireImage(buf, mime);
   try { return await ai.recognizeContents(buf, mime); } catch (e) { throw new HttpError(e.busy ? 503 : 502, e.message); }
 });
 route('GET', '/api/integrations/ai', ADMIN, () => ai.info());
@@ -680,12 +705,14 @@ route('POST', '/api/ai/recognize', USER, async ({ req, query }) => {
   if (imageId) {
     const im = db.prepare('SELECT * FROM images WHERE id = ?').get(imageId);
     if (!im) throw new HttpError(404, 'Foto niet gevonden');
-    buf = fs.readFileSync(path.join(IMG_DIR, `${im.id}.${im.ext}`)); mime = im.mime;
+    try { buf = fs.readFileSync(path.join(IMG_DIR, `${im.id}.${im.ext}`)); } catch { throw new HttpError(404, 'Bestand ontbreekt'); }
+    mime = im.mime;
   } else {
     mime = String(req.headers['content-type'] || '').split(';')[0].trim();
     if (!IMAGE_TYPES[mime]) throw new HttpError(415, 'Alleen JPEG, PNG of WebP');
     buf = await readBody(req, MAX_IMAGE);
     if (!buf.length) throw bad('Leeg bestand');
+    requireImage(buf, mime);
   }
   const tags = db.prepare('SELECT id, name FROM tags').all();
   let r;
@@ -708,6 +735,7 @@ route('PUT', '/api/images/:id/thumb', USER, async ({ req, params }) => {
   if (!img) throw new HttpError(404, 'Niet gevonden');
   const buf = await readBody(req, 1024 * 1024);
   if (!buf.length) throw bad('Leeg bestand');
+  requireImage(buf); // de browser mag een ander formaat kiezen dan het origineel
   fs.writeFileSync(path.join(IMG_DIR, `${img.id}.thumb.${img.ext}`), buf);
   db.prepare('UPDATE images SET has_thumb = 1 WHERE id = ?').run(img.id);
   return { ok: true };
@@ -757,8 +785,9 @@ route('GET', '/api/activity', USER, ({ query }) => ({
 route('GET', '/api/events', USER, ({ req, res }) => {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
   res.write('retry: 3000\n\n');
-  sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+  const client = { req, res };
+  sseClients.add(client);
+  req.on('close', () => sseClients.delete(client));
   return res;
 });
 
@@ -1135,7 +1164,7 @@ route('POST', '/api/import/findmystuff', ADMIN, async ({ req }) => {
   if (!buf.length) throw bad('Leeg bestand');
   let parsed;
   try { parsed = fms.parseBackup(buf); } catch (e) { throw bad(e.message); }
-  const token = require('node:crypto').randomBytes(16).toString('hex');
+  const token = crypto.randomBytes(16).toString('hex');
   fs.writeFileSync(fmsFile(token), buf);
   const prev = db.prepare('SELECT value FROM meta WHERE key = ?').get(`fms_import_${fms.fingerprint(parsed)}`);
   return { token, summary: fms.summarize(parsed), sample: parsed.things.slice(0, 8).map((t) => t.name), already_imported: prev ? prev.value : null };
@@ -1150,9 +1179,11 @@ route('POST', '/api/import/findmystuff/:token', ADMIN, async ({ req, params, use
   const stats = fms.importBackup(parsed, {
     db, tx, user, now, parentId, attachOnly: !!b.attach_only,
     storeImageFile: (thingId, data, mime, position) => {
+      if (sniffImage(data) !== mime) return false; // geen echte foto (of verkeerde extensie): overslaan
       const ext = IMAGE_TYPES[mime];
       const id = Number(db.prepare('INSERT INTO images(thing_id,mime,ext,position,created_by,created_at) VALUES(?,?,?,?,?,?)').run(thingId, mime, ext, position, user.id, now()).lastInsertRowid);
       fs.writeFileSync(path.join(IMG_DIR, `${id}.${ext}`), data);
+      return true;
     },
   });
   fs.unlink(file, () => {});
@@ -1219,7 +1250,8 @@ route('POST', '/api/integrations/ha/expiring', ADMIN, async () => ({ result: awa
 // ---------- statische bestanden ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 function serveStatic(req, res, pathname) {
-  let rel = decodeURIComponent(pathname);
+  let rel;
+  try { rel = decodeURIComponent(pathname); } catch { res.writeHead(400, { 'Content-Type': 'text/plain' }); return res.end('Ongeldig adres'); }
   if (rel === '/' || !path.extname(rel)) rel = '/index.html';
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
